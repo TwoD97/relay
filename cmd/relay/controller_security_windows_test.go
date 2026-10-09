@@ -33,8 +33,42 @@ func assertPrivateControllerSecurity(t *testing.T, path string) {
 		t.Fatal("new controller object did not receive the current user's owner SID", path, err)
 	}
 	dacl, _, err := sd.DACL()
-	if err != nil || dacl == nil || dacl.AceCount != 2 || !strings.Contains(sd.String(), "D:P") || !strings.Contains(sd.String(), ";;;"+sid.String()+")") || !strings.Contains(sd.String(), ";;;SY)") {
+	if err != nil || dacl == nil || dacl.AceCount != 2 {
 		t.Fatal("new controller object did not receive a protected user/SYSTEM-only DACL", path, err)
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("new controller object's DACL permits inheritance", path, err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userSeen, systemSeen := false, false
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&windows.INHERITED_ACE != 0 || ace.Mask != fileAllAccess {
+			t.Fatal("unexpected controller ACL permissions", path)
+		}
+		// SDDL can abbreviate well-known user SIDs (for example the elevated
+		// runner's local Administrator) as LA. Compare identities, not spelling.
+		aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case windows.EqualSid(aceSID, sid):
+			userSeen = true
+		case windows.EqualSid(aceSID, system):
+			systemSeen = true
+		default:
+			t.Fatal("controller DACL permits another identity", path)
+		}
+	}
+	runtime.KeepAlive(sd)
+	if !userSeen || !systemSeen {
+		t.Fatal("controller DACL does not grant both user and SYSTEM access", path)
 	}
 }
 
