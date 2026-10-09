@@ -1,2 +1,4 @@
 # Preserve the checksum-pinned upstream license verbatim, including its spacing.
 licenses/Microsoft.Web.WebView2-1.0.3800.47-LICENSE.txt whitespace=-blank-at-eol
+# License checksums describe upstream bytes, including their line endings.
+licenses/** -text

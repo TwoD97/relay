@@ -123,14 +123,20 @@ def stop_controller(identity, state_dir):
 
 
 class WebDriver:
-    def __init__(self, port):
+    def __init__(self, port, native_port):
         self.base = f"http://127.0.0.1:{port}"
+        self.native_base = f"http://127.0.0.1:{native_port}"
         self.session = None
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def request(self, method, path, data=None):
         body = None if data is None else json.dumps(data).encode()
-        request = urllib.request.Request(self.base + path, data=body, method=method,
+        # tauri-driver only translates capabilities on POST /session. Once
+        # WebKit creates the session, use its unchanged W3C API directly. This
+        # removes the proxy's pooled upstream connection from subsequent commands.
+        # Clicks and keystrokes with an unknown outcome are never retried.
+        base = self.base if method == "POST" and path == "/session" else self.native_base
+        request = urllib.request.Request(base + path, data=body, method=method,
                                          headers={"Content-Type": "application/json"})
         try:
             response = self.opener.open(request, timeout=75)
@@ -362,7 +368,7 @@ def run(args):
                 driver = subprocess.Popen([driver_path, "--port", str(port), "--native-port", str(native_port)],
                     env=environment, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
                 wait_for(lambda: tcp_ready(port), "tauri-driver startup")
-                browser = WebDriver(port)
+                browser = WebDriver(port, native_port)
                 browser.start(desktop)
                 wait_for(lambda: browser.body_contains("A home for your fleet.") and
                          browser.body_contains("This computer"), "native fleet rendering", 60)

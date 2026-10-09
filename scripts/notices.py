@@ -14,18 +14,19 @@ def include(name, version, directory):
     files = sorted({p for glob in ("LICENSE*", "LICENCE*", "COPYING*", "NOTICE*") for p in directory.glob(glob) if p.is_file()})
     output.append(f"\n{'=' * 72}\n{name} {version}\n")
     for path in files:
-        output.append(f"\n--- {path.name} ---\n{path.read_text(errors='replace')}\n")
+        output.append(f"\n--- {path.name} ---\n{path.read_bytes().decode('utf-8')}\n")
     if not files:
         raise SystemExit(f"No license notice found for {name}; inspect before packaging")
 
 go = os.environ.get("RELAY_GO", "go")
-goroot = Path(subprocess.check_output([go, "env", "GOROOT"], text=True).strip())
-go_version = subprocess.check_output([go, "version"], text=True).strip()
+# Go's paths and JSON use UTF-8 independently of the Windows ANSI code page.
+goroot = Path(subprocess.check_output([go, "env", "GOROOT"], text=True, encoding="utf-8").strip())
+go_version = subprocess.check_output([go, "version"], text=True, encoding="utf-8").strip()
 include("Go standard library", go_version, goroot)
 modules = {}
 for platform, arch in (("linux", "amd64"), ("linux", "arm64"), ("windows", "amd64")):
     env = {**os.environ, "GOOS": platform, "GOARCH": arch, "CGO_ENABLED": "0"}
-    stream = subprocess.check_output([go, "list", "-deps", "-json", "./cmd/relay"], text=True, env=env)
+    stream = subprocess.check_output([go, "list", "-deps", "-json", "./cmd/relay"], text=True, encoding="utf-8", env=env)
     decoder = json.JSONDecoder()
     while stream.strip():
         package, end = decoder.raw_decode(stream.lstrip())
@@ -36,11 +37,11 @@ for platform, arch in (("linux", "amd64"), ("linux", "arm64"), ("windows", "amd6
 for name, module in sorted(modules.items()):
     include(name, module["Version"], module.get("Replace", module)["Dir"])
 
-lock = json.loads((root / "web/package-lock.json").read_text())
+lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))
 for path, package in sorted(lock["packages"].items()):
     if not path or package.get("dev") or package.get("devOptional"):
         continue
     include(path.removeprefix("node_modules/"), package["version"], root / "web" / path)
 
 (root / "dist").mkdir(exist_ok=True)
-(root / "dist/THIRD_PARTY_NOTICES.txt").write_text("".join(output), encoding="utf-8")
+(root / "dist/THIRD_PARTY_NOTICES.txt").write_text("".join(output), encoding="utf-8", newline="\n")

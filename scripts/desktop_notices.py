@@ -14,8 +14,8 @@ parser.add_argument("--target", help="Cargo target triple; defaults to the host 
 parser.add_argument("--output", type=Path, help="Destination notices file")
 args = parser.parse_args()
 cargo = os.environ.get("RELAY_CARGO", "cargo")
-target = args.target or subprocess.check_output(["rustc", "--print", "host-tuple"], cwd=root / "desktop", text=True).strip()
-supplemental = json.loads((root / "licenses/manifest.json").read_text())
+target = args.target or subprocess.check_output(["rustc", "--print", "host-tuple"], cwd=root / "desktop", text=True, encoding="utf-8").strip()
+supplemental = json.loads((root / "licenses/manifest.json").read_text(encoding="utf-8"))
 
 def extra_notices(records):
     result = []
@@ -29,9 +29,10 @@ def extra_notices(records):
         result.append(f"\n--- {record.get('component', path.name)} ---\nSource: {record['source']}\n")
         result.append(data.decode("utf-8") + "\n")
     return result
+# Cargo emits UTF-8 JSON even when Windows uses a legacy locale/code page.
 metadata = json.loads(subprocess.check_output([
     cargo, "metadata", "--locked", "--format-version", "1", "--filter-platform", target
-], cwd=root / "desktop", text=True))
+], cwd=root / "desktop", text=True, encoding="utf-8"))
 active = {node["id"] for node in metadata["resolve"]["nodes"]}
 parts = ["Relay desktop: dependency licenses and source manifest\n", f"Target: {target}\n",
          "System webview libraries are supplied by the operating system or its WebView2 runtime installer.\n",
@@ -58,7 +59,7 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
             raise SystemExit(f"No complete license text for {key}; review before packaging")
         parts.extend(extra_notices(records))
     for path in sorted(set(files)):
-        parts.append(f"\n--- {path.name} ---\n{path.read_text(errors='replace')}\n")
+        parts.append(f"\n--- {path.name} ---\n{path.read_bytes().decode('utf-8')}\n")
     key = f"{package['name']}@{package['version']}"
     parts.extend(extra_notices(supplemental["extra_by_crate"].get(key, [])))
 
@@ -86,19 +87,19 @@ class ReadableHTML(HTMLParser):
         if not self.hidden:
             self.parts.append(data)
 
-sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], cwd=root / "desktop", text=True).strip())
+sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], cwd=root / "desktop", text=True, encoding="utf-8").strip())
 copyright_file = sysroot / "share/doc/rust/COPYRIGHT-library.html"
 if not copyright_file.is_file():
     raise SystemExit("Rust standard-library copyright report is missing; install the rust-docs toolchain component before packaging")
 reader = ReadableHTML()
 reader.feed(copyright_file.read_text(encoding="utf-8"))
 parts.append("\n" + "=" * 72 + "\nRust standard library and toolchain-supplied dependency notices\n")
-parts.append(subprocess.check_output(["rustc", "--version", "--verbose"], cwd=root / "desktop", text=True))
+parts.append(subprocess.check_output(["rustc", "--version", "--verbose"], cwd=root / "desktop", text=True, encoding="utf-8"))
 parts.append("".join(reader.parts))
 license_dir = sysroot / "share/doc/rust/licenses"
 for path in sorted(license_dir.glob("*.txt")):
-    parts.append(f"\n--- Rust toolchain license text: {path.name} ---\n{path.read_text(encoding='utf-8')}\n")
+    parts.append(f"\n--- Rust toolchain license text: {path.name} ---\n{path.read_bytes().decode('utf-8')}\n")
 destination = args.output or root / "desktop/resources/RUST_THIRD_PARTY_NOTICES.txt"
 destination.parent.mkdir(parents=True, exist_ok=True)
-destination.write_text("".join(parts), encoding="utf-8")
+destination.write_text("".join(parts), encoding="utf-8", newline="\n")
 print(f"Wrote desktop license/source manifest for {len(active)} resolved packages.")
