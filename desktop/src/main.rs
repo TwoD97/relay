@@ -66,6 +66,11 @@ fn run() -> tauri::Result<()> {
                 .decorations(false)
                 .visible(false)
                 .background_color(tauri::window::Color(16, 19, 18, 255))
+                // Only this webview can reach the authenticated controller,
+                // with navigation constrained below. Enable its standard web
+                // clipboard API for explicit copy/paste gestures; no native
+                // command or clipboard plugin is exposed to page scripts.
+                .enable_clipboard_access()
                     .on_navigation(move |url| {
                         is_shell_page(url)
                             || origin

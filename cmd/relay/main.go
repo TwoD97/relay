@@ -49,6 +49,11 @@ func run(args []string) error {
 		return serveUI(args)
 	case "desktop":
 		return desktopCommand(args)
+	case "hook":
+		if !localRuntimeSupported {
+			return runtimeCommand(command, args)
+		}
+		return hookRuntime(args)
 	case "notify":
 		if !localRuntimeSupported {
 			return runtimeCommand(command, args)

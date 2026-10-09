@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
@@ -209,6 +209,130 @@ test("one-time sign-in link works when clicked from an external site", async ({ 
   } finally {
     await stop(client);
     if (external) await new Promise<void>((resolve) => external!.close(() => resolve()));
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("real binary: permission hook decision and isolated observer preserve the agent PTY", async ({ page }, testInfo) => {
+  test.skip(!binary, "Set RELAY_LIVE_BINARY to a freshly built Relay executable.");
+  test.setTimeout(120000);
+  const executable = resolve(binary!);
+  const temporary = await mkdtemp(join(tmpdir(), "relay-activity-"));
+  const runtimeDir = join(temporary, "runtime");
+  const projectDir = join(temporary, "project with spaces");
+  let daemon: ChildProcess | undefined;
+  let client: ChildProcess | undefined;
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await mkdir(join(runtimeDir, "bin"), { recursive: true, mode: 0o700 });
+    await mkdir(projectDir, { mode: 0o700 });
+    // These deterministic providers shadow user installations only inside this
+    // private runtime. No account, authentication file, or real model is used.
+    await writeFile(join(runtimeDir, "bin", "codex"), "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex-cli 0.153.4\\n'; exit 0; fi\nexit 1\n", { mode: 0o700 });
+    await writeFile(join(runtimeDir, "bin", "claude"), String.raw`#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+flags = ["--print", "--safe-mode", "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--permission-mode", "--disable-slash-commands", "--no-session-persistence", "--no-chrome", "--output-format", "--json-schema", "--system-prompt", "--model", "--settings", "--setting-sources", "--max-turns"]
+if args == ["--version"]:
+    print("2.1.209 (Claude Code)")
+    sys.exit(0)
+if args == ["--help"]:
+    print(" ".join(flags))
+    sys.exit(0)
+if args == ["auth", "status"]:
+    print('{"loggedIn":true}')
+    sys.exit(0)
+root = pathlib.Path(__file__).resolve().parent.parent
+if "--print" in args:
+    for flag in flags:
+        assert flag in args, "missing observer safety flag"
+    for flag, value in {"--tools":"", "--disallowedTools":"mcp__*", "--mcp-config":'{"mcpServers":{}}', "--permission-mode":"dontAsk", "--setting-sources":"", "--settings":'{"disableAllHooks":true}', "--max-turns":"1", "--model":"fixture-small"}.items():
+        assert args[args.index(flag)+1] == value, "unsafe observer flag"
+    assert not any(key.startswith("RELAY_") for key in os.environ), "observer inherited session capability"
+    cwd = pathlib.Path.cwd()
+    assert cwd.parent == root and cwd.name.startswith(".observer-work-"), "observer used source project directory"
+    context = json.load(sys.stdin)
+    assert context["partialObservation"] is True
+    assert "RELAY_APPROVAL_RECEIVED_ALLOW" in context["terminalTail"]
+    assert "not-read-private-fixture-marker" not in json.dumps(context)
+    proof = {"isolationVerified":True,"sourceObserved":True,"model":"fixture-small"}
+    (root / "summary-proof.json").write_text(json.dumps(proof))
+    print(json.dumps({"type":"result","subtype":"success","is_error":False,"structured_output":{"summary":"Fixture summary: two files inspected; next step awaits your input.","steps":["Inspected two fixture files."],"nextSteps":["Choose the next task in the existing terminal."],"blockers":[]}}))
+    sys.exit(0)
+settings = json.loads(args[args.index("--settings")+1])
+hook = settings["hooks"]["PermissionRequest"][0]["hooks"][0]["command"]
+assert " hook --provider claude --event permission" in hook
+print("Waiting for fixture permission request.", flush=True)
+request = {"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"printf fixture-only-action"},"cwd":os.getcwd(),"permission_mode":"default","transcript_path":"not-read-private-fixture-marker"}
+result = subprocess.run(hook, shell=True, input=json.dumps(request), text=True, capture_output=True, timeout=75, check=True)
+decision = json.loads(result.stdout)["hookSpecificOutput"]
+assert decision["hookEventName"] == "PermissionRequest" and decision["decision"] == {"behavior":"allow"}
+print("RELAY_APPROVAL_RECEIVED_ALLOW", flush=True)
+print("Read two fixture files. Waiting for the next human instruction.", flush=True)
+for line in sys.stdin:
+    print("RELAY_AGENT_INPUT:" + line.strip(), flush=True)
+`, { mode: 0o700 });
+    daemon = spawn(executable, ["daemon", "--state-dir", runtimeDir], { stdio: "ignore" });
+    await expect.poll(() => existsSync(join(runtimeDir, "run", "daemon.sock"))).toBeTruthy();
+    const launch = await startUI(executable, join(temporary, "ui"), runtimeDir);
+    client = launch.process;
+    const origin = new URL(launch.url).origin;
+    const sessionsURL = `${origin}/api/hosts/local/runtime/sessions`;
+    await page.goto(launch.url);
+    await page.locator(".machine-card").filter({ hasText: "This computer" }).click();
+    await page.getByRole("button", { name: "New session", exact: true }).first().click();
+    await page.getByRole("radio", { name: /Claude Code/ }).check();
+    await page.getByLabel("Project folder").fill(projectDir);
+    await page.getByLabel("Session name").fill("Permission fixture");
+    const createdResponse = page.waitForResponse((response) => response.url() === sessionsURL && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Start session", exact: true }).click();
+    const created = await createdResponse;
+    expect(created.status()).toBe(201);
+    const session = await created.json();
+    const sessionRoute = `#host/local/session/${session.id}`;
+    await expect(page.getByRole("heading", { name: "Permission fixture", exact: true })).toBeVisible();
+    await page.goto(`${origin}/#activity`);
+    const approval = page.getByRole("article", { name: "Bash request for Permission fixture" });
+    await expect(approval).toBeVisible();
+    await expect(approval).toContainText("printf fixture-only-action");
+    await expect(approval).toContainText("Provider mode: default");
+    const decisionResponse = page.waitForResponse((response) => response.url().endsWith("/decision") && response.request().method() === "POST");
+    await approval.getByRole("button", { name: "Approve once", exact: true }).click();
+    const decided = await decisionResponse;
+    expect(decided.status()).toBe(200);
+    expect(await decided.json()).toMatchObject({ sessionId: session.id, sessionCreatedAt: session.createdAt, status: "submitted", decision: "allow" });
+    await expect(approval).toContainText("Approved once");
+    await expect.poll(async () => (await page.request.get(`${sessionsURL}/${session.id}/history`)).text()).toContain("RELAY_APPROVAL_RECEIVED_ALLOW");
+    const summaryHost = page.getByRole("region", { name: "This computer summaries", exact: true });
+    await summaryHost.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByLabel("Enable session summaries on this machine").check();
+    await page.getByLabel("Summary model").fill("fixture-small");
+    await page.getByRole("button", { name: "Save settings", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Summary settings" })).toHaveCount(0);
+    const summary = page.getByRole("article", { name: "Permission fixture summary" });
+    await expect(summary).toContainText("Fixture summary: two files inspected; next step awaits your input.", { timeout: 20000 });
+    expect(JSON.parse(await readFile(join(runtimeDir, "summary-proof.json"), "utf8"))).toEqual({ isolationVerified: true, sourceObserved: true, model: "fixture-small" });
+    const observer = await (await page.request.get(`${origin}/api/hosts/local/runtime/observer`)).json();
+    expect(observer.limits.remaining).toBe(59);
+    expect(observer.summaries).toHaveLength(1);
+    expect(observer.summaries[0]).toMatchObject({ sessionId: session.id, sessionCreatedAt: session.createdAt, status: "ready", model: "fixture-small" });
+    const sessions = await (await page.request.get(sessionsURL)).json();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ id: session.id, createdAt: session.createdAt, status: "running", permissions: { support: "active", mode: "default" } });
+    expect(await (await page.request.get(`${sessionsURL}/${session.id}/history`)).text()).not.toContain("RELAY_AGENT_INPUT:");
+    await page.screenshot({ path: testInfo.outputPath("live-activity.png"), fullPage: true });
+    await summary.getByRole("button", { name: "Open terminal", exact: true }).click();
+    await expect(page).toHaveURL(`${origin}/${sessionRoute}`);
+    await page.getByRole("button", { name: "Take control", exact: true }).click();
+    await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
+    await page.keyboard.type("still-my-original-agent");
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await page.request.get(`${sessionsURL}/${session.id}/history`)).text()).toContain("RELAY_AGENT_INPUT:still-my-original-agent");
+    expect(errors).toEqual([]);
+  } finally {
+    await stop(client);
+    await stop(daemon);
     await rm(temporary, { recursive: true, force: true });
   }
 });

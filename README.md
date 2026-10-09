@@ -92,22 +92,52 @@ requires the Linux `find` and `head` utilities. Terminal input is sent only whil
 connected and is never queued for later execution.
 
 Click the terminal and type directly; there is no separate command field.
-Arrows, Tab completion, Escape, Ctrl+C and other terminal key sequences go to the
-remote PTY. Use Ctrl+Shift+C/V to copy/paste; pasted text respects bracketed-paste
+Arrows, Tab completion, and Escape go to the remote PTY. Ctrl+C copies selected
+text and interrupts the remote process when nothing is selected. Ctrl+V pastes
+text; Ctrl+Shift+C/V also copy and paste. Pasted text respects bracketed-paste
 mode. Touch screens retain a small row for keys absent from their keyboard.
 
 Opening a terminal watches it. Clicking or focusing it claims available exclusive
 typing and resize access; **Take control** also remains available. Other tabs
 continue watching and cannot take an occupied lease. Closing the view or leaving
-it idle for a minute releases control. Claude's permission/stop hooks and Codex's completion
-notification report attention states. Open the terminal to review and answer
-requests; the app never auto-approves them. Codex's per-session notification
-setting is used by Relay while that session runs; configuration files are not
-edited.
+it idle for a minute releases control. Provider hooks report attention separately
+from the underlying process status. Codex's per-session notification setting is
+used by Relay while that session runs; configuration files are not edited.
 
-Claude reports permission requests through its hooks. Codex currently reports
-turn completion; its permission prompts remain visible in the terminal. These
-signals are distinct from whether the underlying process is still running.
+## Permissions and session summaries
+
+Open **Activity** for pending permission requests across your connected machines.
+Each request shows the originating session and exact tool arguments. Choose
+**Approve once**, **Deny**, or **Continue in terminal**. Decisions apply to one
+request and never change provider policy or grant future tools access. A request
+accepted by another client cannot be answered a second time. Requests expire;
+lost replies are not replayed. Existing terminal sessions remain fully usable.
+
+Approval integration requires a new session on a compatible runtime and provider
+CLI. Relay conservatively checks Claude Code 2.1.209+ or Codex 0.153.4+ with hooks
+enabled. Codex requires reviewing and trusting the definitions in `/hooks`.
+Relay does not bypass hook trust, enable hooks against your configuration, or
+override permission settings. Unsupported prompts (including Claude sandbox
+network prompts), older CLIs, and untrusted hooks remain in the terminal. See
+[the activity contract](docs/ACTIVITY.md) for exact guarantees and limitations.
+
+Optional summaries are configured per machine in **Activity → Summary settings**.
+They use that host's existing Claude Code sign-in and a configurable model
+(default `haiku`) to summarize both Claude Code and Codex sessions. Summaries
+start disabled. Enabling them sends bounded terminal excerpts to the provider
+and consumes account usage. The worker has tools, MCP, hooks, and project
+instructions disabled; it cannot approve requests or type into terminal sessions.
+Codex is not yet available as the summary worker because a supported way to
+disable all its tools has not been verified.
+
+Automatic summaries require changed agent context, with a default five-minute interval,
+one worker per host, and at most 60 requests per hour. Login, setup, shell, and
+maintenance sessions are excluded. The dashboard labels stale summaries and
+keeps their sampling time, model, and reported steps. Model output is advisory;
+verify it in the terminal. Failed or interrupted requests require an explicit
+refresh and are never automatically retried. Explicit refresh also counts toward
+the usage cap, including when context is unchanged. Summaries do not write shared
+project memory or merge provider conversations.
 
 ## Use from an agent or script
 

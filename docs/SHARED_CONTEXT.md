@@ -17,7 +17,8 @@ not merge Claude and Codex native conversations, private generated memories, or
 authentication. Existing sessions may have already loaded their instructions;
 start a new session to pick up the prepared project files. Later sessions and
 humans can update the notes with relevant decisions and progress. Relay does not
-automatically summarize private transcripts or run a model to populate them.
+run a model to populate these files. The separate, opt-in Activity summary worker
+produces a private dashboard cache and never edits project instructions or memory.
 
 Review the new project files before committing them. Keep credentials and raw
 conversation histories out of shared notes. Existing ancestor instructions,

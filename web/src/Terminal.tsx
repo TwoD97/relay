@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { ArrowDown, ArrowUp, CornerDownLeft, Eye, Keyboard, RotateCw } from "lucide-react";
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Eye, Keyboard, RotateCw } from "lucide-react";
 import { websocketURL } from "./api";
 import "@xterm/xterm/css/xterm.css";
 
@@ -15,6 +15,8 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const socket = useRef<WebSocket | null>(null);
   const terminal = useRef<XTerminal | null>(null);
   const connect = useRef<() => void>(() => {});
+  const copySelection = useRef<() => void>(() => {});
+  const pasteClipboard = useRef<() => void>(() => {});
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
   const finishedRef = useRef(finished);
@@ -24,6 +26,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const [owner, setOwner] = useState(false);
   const [available, setAvailable] = useState(false);
   const [controlReason, setControlReason] = useState("");
+  const [selected, setSelected] = useState(false);
   const ownerRef = useRef(false);
   const claimPending = useRef(false);
   const claimIntent = useRef(false);
@@ -48,31 +51,72 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     term.open(container.current);
     term.textarea?.setAttribute("aria-label", `${label} input`);
     terminal.current = term;
-    // Keep terminal control sequences (including Ctrl+C and Ctrl+V) intact.
-    // Explicit clipboard shortcuts use xterm's selection and paste handling.
+    const copyText = () => {
+      const text = term.getSelection();
+      if (!text) return;
+      const fallback = () => {
+        if (disposed) return;
+        // Some embedded browsers do not implement the async clipboard API.
+        // Select the exact xterm text in a temporary DOM field for native copy.
+        const previous = document.activeElement;
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.readOnly = true;
+        field.style.cssText = "position:fixed;opacity:0;pointer-events:none;left:-10000px;top:0";
+        document.body.append(field);
+        field.select();
+        let copied = false;
+        try { copied = document.execCommand("copy"); } catch { /* Report below. */ }
+        field.remove();
+        if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
+        if (!copied) setNote("Clipboard access was denied. Select text and use the browser's Copy command.");
+      };
+      if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(fallback);
+      else fallback();
+    };
+    const pasteText = () => {
+      const ws = socket.current;
+      const pasteGeneration = generation;
+      const pasteControlGeneration = controlGeneration;
+      if (ws?.readyState !== WebSocket.OPEN || !enabledRef.current || finishedRef.current || (exclusive && !ownerRef.current)) return;
+      term.focus();
+      const current = () => !disposed && generation === pasteGeneration && controlGeneration === pasteControlGeneration && socket.current === ws && ws.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && document.activeElement === term.textarea && document.hasFocus() && (!exclusive || ownerRef.current);
+      const fallback = () => {
+        if (!current()) return;
+        // WebKit supports native paste after explicit user activation even
+        // when navigator.clipboard is unavailable. xterm owns the paste event.
+        let pasted = false;
+        try { pasted = document.execCommand("paste"); } catch { /* Report below. */ }
+        if (!pasted) setNote("Clipboard access was denied. Use the browser's Paste command or Shift+Insert.");
+      };
+      if (navigator.clipboard?.readText) {
+        void navigator.clipboard.readText().then((text) => {
+          // Never paste delayed clipboard contents into another attach, lease,
+          // or field. xterm preserves the remote bracketed-paste protocol.
+          if (current()) term.paste(text);
+        }).catch(fallback);
+      } else fallback();
+    };
+    copySelection.current = copyText;
+    pasteClipboard.current = pasteText;
+    const selection = term.onSelectionChange(() => setSelected(term.hasSelection()));
+    // Standard text clipboard shortcuts work in the desktop and browser. With
+    // no selected text, Ctrl+C remains the remote interrupt. Ctrl+Alt+V sends
+    // the literal Ctrl+V key when a remote application needs it.
     term.attachCustomKeyEventHandler((event) => {
       // A viewer that cannot type must still be able to tab out of the terminal.
       if (event.key === "Tab" && term.options.disableStdin) return false;
-      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || !["c", "v"].includes(event.key.toLowerCase())) return true;
+      const key = event.key.toLowerCase();
+      if (key === "v" && event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey) {
+        event.preventDefault();
+        if (event.type === "keydown") term.input("\u0016", true);
+        return false;
+      }
+      if (event.altKey || event.ctrlKey === event.metaKey || !["c", "v"].includes(key)) return true;
+      if (key === "c" && !event.shiftKey && !event.metaKey && !term.hasSelection()) return true;
       event.preventDefault();
       if (event.type !== "keydown") return false;
-      if (event.key.toLowerCase() === "c") {
-        if (term.hasSelection() && !document.execCommand("copy")) {
-          void navigator.clipboard?.writeText(term.getSelection()).catch(() => { if (!disposed) setNote("Clipboard access was denied. Use the terminal context menu to copy."); });
-        }
-      } else {
-        const ws = socket.current;
-        const pasteGeneration = generation;
-        const pasteControlGeneration = controlGeneration;
-        if (ws?.readyState !== WebSocket.OPEN || !enabledRef.current || finishedRef.current || (exclusive && !ownerRef.current)) return false;
-        if (navigator.clipboard?.readText) {
-          void navigator.clipboard.readText().then((text) => {
-            // A delayed permission response must not paste into a new attach
-            // or after control has been released. Never queue or retry input.
-            if (!disposed && generation === pasteGeneration && controlGeneration === pasteControlGeneration && socket.current === ws && ws.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && document.activeElement === term.textarea && document.hasFocus() && (!exclusive || ownerRef.current)) term.paste(text);
-          }).catch(() => { if (!disposed) setNote("Clipboard access was denied. Use the terminal context menu to paste."); });
-        } else if (!document.execCommand("paste")) setNote("Use the terminal context menu to paste.");
-      }
+      if (key === "c") copyText(); else pasteText();
       return false;
     });
     const resize = () => {
@@ -204,12 +248,15 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       clearTimeout(retry);
       observer.disconnect();
       keyInput.dispose();
+      selection.dispose();
       const ws = socket.current;
       if (ws) { ws.onclose = null; if (exclusive && ownerRef.current && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "release" })); ws.close(); }
       socket.current = null;
       terminal.current = null;
       term.dispose();
       connect.current = () => {};
+      copySelection.current = () => {};
+      pasteClipboard.current = () => {};
     };
   }, [path, autoReconnect, exclusive]);
 
@@ -252,7 +299,9 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   return <div className="terminal-shell">
     <div className="terminal-toolbar">
       <span className={`terminal-link ${active ? "live" : ""}`}>{active && exclusive ? owner ? <Keyboard size={12} /> : <Eye size={12} /> : <span className="status-dot" />}{finished ? "Saved output" : active ? exclusive ? owner ? "Controlling" : "Watching" : "Connected" : link === "connecting" && enabled ? "Connecting…" : "Disconnected"}</span>
-      <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || "Type directly · Ctrl+Shift+C / V to copy / paste" : note || "Input is paused"}</span>
+      <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || "Ctrl+V paste · Ctrl+C copy selection / interrupt" : note || "Input is paused"}</span>
+      <button className="text-button" disabled={!selected} onClick={() => copySelection.current()} aria-label="Copy terminal selection" title="Copy selection (Ctrl+C or Ctrl+Shift+C)"><Copy size={13} /> Copy</button>
+      {!finished && <button className="text-button" disabled={!writable} onClick={() => pasteClipboard.current()} aria-label="Paste text into terminal" title="Paste text (Ctrl+V or Ctrl+Shift+V). Ctrl+Alt+V sends a literal Ctrl+V."><ClipboardPaste size={13} /> Paste</button>}
       {active && exclusive && <button ref={controlButton} className="text-button" disabled={!owner && !available} onClick={() => owner ? socket.current?.send(JSON.stringify({ type: "release" })) : claim()}>{owner ? "Release control" : "Take control"}</button>}
       {!active && enabled && !finished && <button className="text-button" onClick={() => connect.current()} aria-label="Reconnect terminal"><RotateCw size={13} /> Reconnect</button>}
     </div>

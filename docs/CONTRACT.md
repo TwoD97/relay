@@ -55,10 +55,12 @@ atomically switch the managed launcher. Same-harness maintenance conflicts retur
 managed replacement without modifying external binaries or provider credentials.
 `POST /api/harnesses/{id}/login`: -> Session for provider login PTY.
 
-Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,purpose?,processIdentity?,recovery?}`.
+Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,permissions?,purpose?,processIdentity?,recovery?}`.
 `purpose:"login"` identifies an ephemeral provider-login transcript: memory only
 while active, cleared on exit, and never persisted as terminal history.
 Attention: `{kind:"completed"|"notification"|"permission",source,updatedAt}`.
+Optional approval and observer routes are specified in [ACTIVITY.md](ACTIVITY.md).
+Older runtimes may return 404 for these capabilities without becoming incompatible.
 Status is evidence-based `running|exited|interrupted`; do not fabricate agent approval
 state from incidental screen text. Session metadata persists atomically; after daemon
 restart previously running sessions become interrupted. Browser/SSH disconnect does

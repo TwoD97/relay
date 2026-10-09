@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Bell, ChevronDown, ChevronRight, Folder, Layers3, Plus, Search, Server, Terminal, X } from "lucide-react";
 import type { FleetState, Host, Selection, Session } from "./types";
+import { pendingApprovals } from "./Approvals";
 import { maintenanceNeedsAttention } from "./MaintenanceJobs";
 
 export function HostStatus({ host, compact = false }: { host: Host; compact?: boolean }) {
@@ -40,12 +41,14 @@ export function Sidebar({ state, selected, mobileOpen, onClose, onSelect, onAdd 
   const attention = state.hosts.flatMap((host) => (state.runtimes[host.id]?.sessions ?? []).filter((session) => session.attention && session.attention.kind !== "completed").map((session) => ({ host, session })));
   const maintenanceAttention = new Set((state.maintenanceJobs ?? []).filter(maintenanceNeedsAttention).map((job) => job.hostId));
   const hostAttention = state.hosts.filter((host) => host.status === "error" || host.runtimeOperation?.status === "error" || host.setupWarning || maintenanceAttention.has(host.id));
+  const approvals = pendingApprovals(state);
   const attentionCount = attention.length + hostAttention.length;
   return <>
     {mobileOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={onClose} />}
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`} aria-label="Fleet navigation" inert={mobile && !mobileOpen} aria-hidden={mobile && !mobileOpen ? true : undefined}>
       <div className="brand-row"><button className="brand" onClick={() => select(null)} aria-label="Relay home"><svg className="brand-mark" aria-hidden="true" viewBox="0 0 28 28"><path d="M7 21 21 7" /><circle cx="7" cy="21" r="4" /><circle cx="21" cy="7" r="4" /></svg><span>relay<span className="brand-period">.</span></span></button><button className="icon-button mobile-close" aria-label="Close navigation" onClick={onClose}><X size={18} /></button></div>
       <div className="sidebar-main"><button className={`fleet-nav ${!selected ? "active" : ""}`} onClick={() => select(null)}><Layers3 size={17} /><span>Fleet overview</span><span className="nav-count">{state.hosts.length}</span></button>
+        <button className={`fleet-nav ${selected?.view === "activity" ? "active" : ""}`} onClick={() => select({ view: "activity" })}><Bell size={17} /><span>Activity</span>{approvals > 0 && <span className="nav-count" aria-label={`${approvals} pending approvals`}>{approvals}</span>}</button>
         <label className="sidebar-search"><Search size={15} /><input aria-label="Filter machines and sessions" placeholder="Find a machine or session…" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button aria-label="Clear filter" onClick={() => setQuery("")}><X size={13} /></button>}</label>
         {attentionCount > 0 && <section className="attention-pins" aria-label="Needs attention"><div className="attention-label"><Bell size={12} /><span>NEEDS ATTENTION</span><b>{attentionCount}</b></div>{hostAttention.map((host) => <button key={host.id} className="attention-pin" onClick={() => select({ host: host.id })}><strong>{host.name}</strong><span>{host.status === "error" ? "Connection needs attention" : host.runtimeOperation?.status === "error" ? "Runtime maintenance failed" : maintenanceAttention.has(host.id) ? "Agent maintenance needs attention" : "Agent coordination setup"}</span><ArrowUpRight size={13} /></button>)}{attention.map(({ host, session }) => <button key={`${host.id}/${session.id}`} className="attention-pin" onClick={() => select({ host: host.id, session: session.id })}><strong>{session.title}</strong><span>{host.name} · {session.attention?.kind === "permission" ? "Permission event" : "Notification"}</span><ArrowUpRight size={13} /></button>)}</section>}
         <div className="sidebar-section-label"><span>MACHINES</span><button aria-label="Add machine" title="Add machine" onClick={onAdd}><Plus size={15} /></button></div>

@@ -98,6 +98,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var path string
+	var permissions *Permissions
 	var args []string
 	if req.Harness == "shell" {
 		path = os.Getenv("SHELL")
@@ -121,9 +122,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, exeErr)
 			return
 		}
-		args = harnessArguments(req.Harness, executable)
+		permissions = s.permissionCapability(r.Context(), req.Harness, path)
+		args = permissionHarnessArguments(req.Harness, executable, permissions.Support != "terminal-only")
 	}
-	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness}, req.Cols, req.Rows, func(_ context.Context, _ io.Writer) (*exec.Cmd, error) { return exec.Command(path, args...), nil })
+	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, _ io.Writer) (*exec.Cmd, error) { return exec.Command(path, args...), nil })
 	if err != nil {
 		fail(w, 409, err)
 		return
@@ -205,6 +207,9 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 500, err)
 		return
+	}
+	if s.observer != nil {
+		s.observer.removeSession(id)
 	}
 	w.WriteHeader(204)
 }

@@ -1,14 +1,16 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import type { Harness, HarnessAction, HarnessId, Host, MaintenanceJob, Session } from "../src/types";
+import type { Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, Session } from "../src/types";
 
 export const local: Host = { id: "local", name: "This computer", target: "local", port: 0, status: "online", stage: "Local runtime", createdAt: "2026-10-07T08:00:00Z" };
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; maintenanceJobs?: MaintenanceJob[]; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; maintenanceJobs?: MaintenanceJob[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
+  const approvals = options.approvals ?? {};
+  const observers = options.observers ?? {};
   const mutations: { method: string; path: string; body: unknown; csrf: string | undefined }[] = [];
   const terminalMessages: { path: string; type: string; data?: string; cols?: number; rows?: number }[] = [];
   const attachments: string[] = [];
@@ -93,6 +95,25 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       const directories = tree[folder].filter((name) => name.startsWith(prefix) && (hidden || prefix.startsWith(".") || !name.startsWith("."))).map((name) => ({ name, path: (folder === "/" ? "" : folder) + "/" + name }));
       return json({ home, path: folder, parent: folder === "/" ? null : folder.slice(0, folder.lastIndexOf("/")) || "/", directories, truncated: false });
     }
+    if (suffix === "runtime/approvals" && hostId in approvals) return json({ requests: approvals[hostId] });
+    if (/^runtime\/approvals\/[^/]+\/decision$/.test(suffix)) {
+      const approval = approvals[hostId]?.find((item) => item.id === rest[2]);
+      if (!approval || approval.status !== "pending" || approval.sessionId !== body.sessionId || approval.sessionCreatedAt !== body.sessionCreatedAt || Date.parse(approval.expiresAt) <= Date.now()) return json({ error: "Approval is stale or resolved." }, 409);
+      Object.assign(approval, { status: "submitted", decision: body.decision });
+      return json(approval);
+    }
+    if (suffix === "runtime/observer" && hostId in observers) return json(observers[hostId]);
+    if (suffix === "runtime/observer/config" && hostId in observers) { observers[hostId].config = body; return json(observers[hostId]); }
+    if (suffix === "runtime/observer/refresh" && hostId in observers) {
+      const observer = observers[hostId];
+      if (!observer.config.enabled) return json({ error: "Enable summaries first." }, 409);
+      const session = sessions[hostId]?.find((item) => item.id === body.sessionId && item.createdAt === body.sessionCreatedAt && item.harness !== "shell" && !item.purpose);
+      if (!session) return json({ error: "Session unavailable." }, 409);
+      observer.running = true; observer.activeSessionId = session.id;
+      const old = observer.summaries.find((item) => item.sessionId === session.id && item.sessionCreatedAt === session.createdAt);
+      observer.summaries = [...observer.summaries.filter((item) => item !== old), { sessionId: session.id, sessionCreatedAt: session.createdAt, provider: "claude", model: observer.config.model, summary: "", steps: [], nextSteps: [], blockers: [], sourceStatus: session.status, stale: false, ...old, status: "queued", updatedAt: new Date().toISOString() }];
+      return json(observer, 202);
+    }
     if (suffix === "runtime/harnesses") {
       if (options.hangHarnesses?.includes(hostId)) return;
       const harnesses: Harness[] = [{ id: "shell", name: "Shell", installed: true }, { id: "claude", name: "Claude Code", installed: false }, { id: "codex", name: "Codex", installed: true, version: "codex-cli 1.0.0", authenticated: true }];
@@ -144,7 +165,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     });
   });
   return {
-    hosts, sessions, maintenanceJobs, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
+    hosts, sessions, maintenanceJobs, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
     startMaintenanceJob: (id: string) => {
       const job = maintenanceJobs.find((job) => job.id === id)!;
       const name = job.harness === "claude" ? "Claude Code" : "Codex";

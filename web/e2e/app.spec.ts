@@ -63,7 +63,7 @@ test("direct terminal keyboard preserves editing keys and Ctrl-C", async ({ page
   await page.getByRole("button", { name: "Take control", exact: true }).click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   await page.keyboard.type("abc");
-  for (const key of ["ArrowLeft", "Backspace", "Tab", "ArrowUp", "ArrowDown", "ArrowRight", "Control+c", "Control+v", "Enter"]) await page.keyboard.press(key);
+  for (const key of ["ArrowLeft", "Backspace", "Tab", "ArrowUp", "ArrowDown", "ArrowRight", "Control+c", "Control+Alt+v", "Enter"]) await page.keyboard.press(key);
   await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe("abc\u001b[D\u007f\t\u001b[A\u001b[B\u001b[C\u0003\u0016\r");
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
 });

@@ -34,6 +34,22 @@ export interface MaintenanceJob {
   error?: string;
   cleanupStatus?: "pending" | "removed" | "retained" | "uncertain";
 }
+export interface Approval {
+  id: string;
+  sessionId: string;
+  sessionCreatedAt: string;
+  provider: "claude" | "codex";
+  toolName: string;
+  input: unknown;
+  cwd: string;
+  permissionMode?: string;
+  createdAt: string;
+  expiresAt: string;
+  status: "pending" | "submitted" | "expired" | "cancelled";
+  decision?: "allow" | "deny" | "terminal";
+  detail?: string;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -45,7 +61,8 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   exitCode?: number;
-  attention?: { kind: "completed" | "notification" | "permission"; source: "claude-hook" | "codex-notify"; updatedAt: string };
+  permissions?: { support: "configured" | "active" | "terminal-only"; detail: string; mode?: string; modeObservedAt?: string };
+  attention?: { kind: "completed" | "notification" | "permission"; source: "claude-hook" | "codex-hook" | "codex-notify"; updatedAt: string };
 }
 
 export interface Harness {
@@ -78,6 +95,39 @@ export interface ProjectContextReport {
   warnings: string[];
 }
 
+export interface ObserverConfig {
+  enabled: boolean;
+  provider: "claude";
+  model: string;
+  intervalSeconds: number;
+}
+export interface SessionSummary {
+  sessionId: string;
+  sessionCreatedAt: string;
+  provider: "claude";
+  model: string;
+  status: "queued" | "running" | "ready" | "error";
+  summary: string;
+  steps: string[];
+  nextSteps: string[];
+  blockers: string[];
+  sampledAt?: string;
+  generatedAt?: string;
+  updatedAt: string;
+  sourceStatus: string;
+  stale: boolean;
+  error?: string;
+}
+export interface ObserverState {
+  limits?: { requestsPerHour: number; remaining: number };
+  config: ObserverConfig;
+  running: boolean;
+  activeSessionId?: string;
+  summaries: SessionSummary[];
+  error?: string;
+  providers: { id: "claude" | "codex"; supported: boolean; detail?: string }[];
+}
+
 export interface RuntimeState {
   sessions: Session[];
   harnesses: Harness[];
@@ -85,6 +135,13 @@ export interface RuntimeState {
   fetchedAt?: number;
   sessionsError?: string;
   harnessesError?: string;
+  approvals?: Approval[];
+  approvalsSupported?: boolean;
+  approvalsError?: string;
+  approvalsFetchedAt?: number;
+  observer?: ObserverState;
+  observerSupported?: boolean;
+  observerError?: string;
 }
 
 export interface FleetState {
@@ -99,4 +156,4 @@ export interface FleetState {
   reconnectError?: string;
 }
 
-export type Selection = { host: string; session?: string } | null;
+export type Selection = { host: string; session?: string; view?: never } | { view: "activity"; host?: never; session?: never } | null;

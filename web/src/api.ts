@@ -1,4 +1,4 @@
-import type { DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, ProjectContextReport, Session } from "./types";
+import type { Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -62,6 +62,11 @@ export const api = {
   prepareProjectContext: (host: string, path: string) => request<ProjectContextReport>(hostPath(host, "project-context"), { method: "POST", body: JSON.stringify({ path }), signal: AbortSignal.timeout(190000) }),
   reconnect: () => request<{ queued: number }>("/api/reconnect", { method: "POST" }),
   repairRuntime: (host: string) => request<Host>(hostPath(host, "repair-runtime"), { method: "POST" }),
+  approvals: (host: string) => request<{ requests: Approval[] }>(runtimePath(host, "approvals")),
+  decideApproval: (host: string, approval: Approval, decision: "allow" | "deny" | "terminal") => request<Approval>(runtimePath(host, `approvals/${encodeURIComponent(approval.id)}/decision`), { method: "POST", body: JSON.stringify({ sessionId: approval.sessionId, sessionCreatedAt: approval.sessionCreatedAt, decision }) }),
+  observer: (host: string) => request<ObserverState>(runtimePath(host, "observer")),
+  configureObserver: (host: string, config: ObserverConfig) => request<ObserverState>(runtimePath(host, "observer/config"), { method: "POST", body: JSON.stringify(config) }),
+  refreshSummary: (host: string, session: Session) => request<ObserverState>(runtimePath(host, "observer/refresh"), { method: "POST", body: JSON.stringify({ sessionId: session.id, sessionCreatedAt: session.createdAt }) }),
   sessions: (host: string) => request<Session[]>(runtimePath(host, "sessions")),
   directories: (host: string, path: string, prefix: string, hidden: boolean, signal: AbortSignal) => request<DirectoryListing>(hostPath(host, `directories?${new URLSearchParams({ path, prefix, hidden: String(hidden) })}`), { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) }),
   harnesses: (host: string) => request<Harness[]>(runtimePath(host, "harnesses"), { signal: AbortSignal.timeout(15000) }),

@@ -32,7 +32,7 @@ cp scripts/install.sh dist/install.sh
 cp README.md dist/README.md
 cp LICENSE NOTICE THIRD_PARTY_NOTICES.md dist/
 mkdir -p dist/docs
-cp docs/CONTRACT.md docs/VALIDATION.md docs/SHARED_CONTEXT.md dist/docs/
+cp docs/CONTRACT.md docs/VALIDATION.md docs/SHARED_CONTEXT.md docs/ACTIVITY.md dist/docs/
 RELAY_GO="$RELAY_GO" python3 scripts/notices.py
 printf '%s\n' "$RELAY_VERSION" > dist/VERSION
 tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf dist/relay-linux-bundle.tar.gz relay-linux-amd64 relay-linux-arm64 SHA256SUMS VERSION install.sh README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.txt docs

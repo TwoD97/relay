@@ -34,22 +34,23 @@ export function useFleet() {
     };
     // Each host and endpoint refreshes independently. A slow harness probe must
     // not hold up terminal session discovery or another machine's state.
-    const refreshRuntime = async (host: string, kind: "sessions" | "harnesses") => {
+    const refreshRuntime = async (host: string, kind: "sessions" | "harnesses" | "approvals" | "observer") => {
       const key = `${host}/${kind}`;
       if (updating.has(key)) return;
       updating.add(key);
       try {
-        const value = kind === "sessions" ? await api.sessions(host) : await api.harnesses(host);
+        const value = kind === "sessions" ? await api.sessions(host) : kind === "harnesses" ? await api.harnesses(host) : kind === "approvals" ? (await api.approvals(host)).requests : await api.observer(host);
         if (mounted) setState((old) => {
           const current = old.runtimes[host] ?? { sessions: [], harnesses: [] };
-          const next = { ...current, [kind]: value ?? [], [`${kind}Error`]: undefined, ...(kind === "sessions" ? { fetchedAt: Date.now() } : {}) } as RuntimeState;
+          const next = { ...current, [kind]: value ?? [], [`${kind}Error`]: undefined, ...(kind === "sessions" ? { fetchedAt: Date.now() } : kind === "approvals" ? { approvalsFetchedAt: Date.now(), approvalsSupported: true } : kind === "observer" ? { observerSupported: true } : {}) } as RuntimeState;
           next.error = [next.sessionsError, next.harnessesError].filter(Boolean).join(" · ") || undefined;
           return { ...old, runtimes: { ...old.runtimes, [host]: next } };
         });
       } catch (error) {
         if (mounted) setState((old) => {
           const current = old.runtimes[host] ?? { sessions: [], harnesses: [] };
-          const next = { ...current, [`${kind}Error`]: errorMessage(error) };
+          const unsupported = (kind === "approvals" || kind === "observer") && error instanceof ApiError && error.status === 404;
+          const next = { ...current, [`${kind}Error`]: unsupported ? undefined : errorMessage(error), ...(unsupported ? { [kind]: undefined, [`${kind}Supported`]: false } : {}) };
           next.error = [next.sessionsError, next.harnessesError].filter(Boolean).join(" · ");
           return { ...old, runtimes: { ...old.runtimes, [host]: next } };
         });
@@ -80,6 +81,8 @@ export function useFleet() {
         for (const host of (fleet.hosts ?? []).filter((host) => host.status === "online")) {
           void refreshRuntime(host.id, "sessions");
           void refreshRuntime(host.id, "harnesses");
+          void refreshRuntime(host.id, "approvals");
+          void refreshRuntime(host.id, "observer");
         }
       } catch (error) {
         if (mounted) setState((old) => ({ ...old, loading: false, error: errorMessage(error), unauthorized: error instanceof ApiError && error.status === 401 }));

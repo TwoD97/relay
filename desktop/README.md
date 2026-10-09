@@ -25,7 +25,12 @@ menu with Reload, Reconnect, Open in Browser, and Quit. Keyboard shortcuts remai
 Ctrl+R, Ctrl+Shift+R, Ctrl+Shift+B, and Ctrl+Q. Open in
 Browser obtains a fresh one-time sign-in link for the default browser. Reconnect
 also renews authentication after a controller restart. The webview retains its
-standard text selection and clipboard shortcuts.
+standard text selection and clipboard shortcuts. In a terminal, Ctrl+V or
+Ctrl+Shift+V pastes text from this computer's clipboard; Cmd+V works in a Mac
+browser. Ctrl+C copies selected terminal text, or sends an interrupt when nothing
+is selected. Ctrl+Shift+C always means copy. The terminal's Copy and Paste
+buttons provide the same actions. Ctrl+Alt+V sends a literal Ctrl+V to a remote
+application that needs that key, including an agent's own image-paste command.
 
 ## Build
 
@@ -126,6 +131,10 @@ accelerators without drawing a system menu bar. The pinned Tauri `unstable`
 feature supplies the separate child-webview API. The single-instance plugin
 runs only in the native process. The HTTP controller
 continues to enforce its existing cookie, CSRF, WebSocket, and origin checks.
+Standard web clipboard access is enabled only for the controller content
+webview. This does not grant Tauri commands or a native clipboard plugin to the
+page. Paste requires a live terminal control lease, and a delayed clipboard
+response is discarded if the terminal disconnects, loses control, or loses focus.
 
 ## Checks
 
@@ -147,6 +156,10 @@ Windows account and checks the installed payloads and native shortcut. The full
 interactive Windows gate is `test_windows_desktop.ps1`; it requires a matching
 WebView2 driver and a disposable Linux SSH host. Hosted Windows CI does not claim
 to cover native mouse/focus behavior; run that interactive gate before shipping.
+Pass `-Clipboard` with a disposable Windows account clipboard to additionally
+check native text copy/paste. This replaces clipboard contents with test text
+and never captures the account's previous clipboard. The Linux gate always
+checks copy/paste using its isolated Xvfb clipboard.
 
 Tauri API references used by this wrapper:
 [window navigation](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html),

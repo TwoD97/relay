@@ -31,6 +31,7 @@ const (
 )
 
 type Session struct {
+	Permissions     *Permissions     `json:"permissions,omitempty"`
 	ProcessIdentity *ProcessIdentity `json:"processIdentity,omitempty"`
 	Recovery        *SessionRecovery `json:"recovery,omitempty"`
 	Purpose         string           `json:"purpose,omitempty"`
@@ -47,6 +48,10 @@ type Session struct {
 }
 
 type Server struct {
+	observer                          *observerManager
+	approvalMu                        sync.Mutex
+	approvals                         map[string]*approvalWaiter
+	approvalTTL                       time.Duration
 	metadataDirty                     bool
 	storageError                      string
 	mu                                sync.Mutex
@@ -89,6 +94,8 @@ func New(stateDir, version string) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
+	s.observer = newObserver(s)
+	go s.observer.loop(ctx)
 	go s.flushLoop(ctx)
 	return s, nil
 }
@@ -96,6 +103,12 @@ func New(stateDir, version string) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("GET /api/observer", s.getObserver)
+	mux.HandleFunc("POST /api/observer/config", s.configureObserver)
+	mux.HandleFunc("POST /api/observer/refresh", s.refreshObserver)
+	mux.HandleFunc("GET /api/approvals", s.listApprovals)
+	mux.HandleFunc("POST /api/approvals/{id}/decision", s.decideApproval)
+	mux.HandleFunc("POST /api/sessions/{id}/approval-hook", s.approvalHook)
 	mux.HandleFunc("POST /api/sessions/{id}/events", s.sessionEvent)
 	mux.HandleFunc("POST /api/sessions/{id}/attention/ack", s.ackAttention)
 	mux.HandleFunc("GET /api/sessions", s.listSessions)
@@ -130,6 +143,9 @@ func (s *Server) Close() error {
 	}
 	s.mu.Unlock()
 	s.cancel()
+	if s.observer != nil {
+		<-s.observer.done
+	}
 	var wg sync.WaitGroup
 	for _, p := range sessions {
 		wg.Add(1)

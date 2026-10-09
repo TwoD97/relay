@@ -165,6 +165,9 @@ class WebDriver:
     def script(self, source, *arguments):
         return self.call("POST", "/execute/sync", {"script": source, "args": list(arguments)})
 
+    def async_script(self, source, *arguments):
+        return self.call("POST", "/execute/async", {"script": source, "args": list(arguments)})
+
     def body_contains(self, text):
         return self.script("return document.body && document.body.innerText.includes(arguments[0]);", text)
 
@@ -237,6 +240,34 @@ class WebDriver:
         self.terminal_command("printf 'RELAY_%s\\n' 'INTERRUPTED'")
         wait_for(lambda: self.terminal_contains("RELAY_INTERRUPTED"), "Ctrl+C interrupts foreground command", 5)
         print("PASS: direct terminal arrows, Backspace, Tab and Ctrl+C", flush=True)
+
+    def check_terminal_clipboard(self):
+        # Xvfb owns an isolated clipboard: no user's clipboard is read or changed.
+        command = "printf 'RELAY_%s\\n' 'NATIVE_CLIPBOARD_OK'"
+        copied = self.async_script("""
+          const done=arguments[arguments.length-1];
+          navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));
+        """, command)
+        require(copied is True, "Native clipboard text write was denied")
+        self.terminal_keys("\ue009v\ue000")
+        wait_for(lambda: self.terminal_contains(command), "Ctrl+V pastes native clipboard text")
+        require(not self.terminal_contains("RELAY_NATIVE_CLIPBOARD_OK"), "Pasting text unexpectedly submitted the command")
+        self.terminal_keys("\ue007")
+        wait_for(lambda: self.terminal_contains("RELAY_NATIVE_CLIPBOARD_OK"), "pasted native command executes only after Enter")
+        self.terminal_command("printf '\\033[2J\\033[HRELAY_COPY_ME\\n'")
+        wait_for(lambda: self.script("return document.querySelector('.xterm-rows > div')?.textContent.trim()==='RELAY_COPY_ME';"), "terminal copy fixture")
+        point = self.script("const r=document.querySelector('.xterm-rows > div').getBoundingClientRect();return {x:Math.round(r.x+15),y:Math.round(r.y+r.height/2)};")
+        self.call("POST", "/actions", {"actions": [{"type": "pointer", "id": "clipboard-mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "duration": 0, "origin": "viewport", "x": point["x"], "y": point["y"]},
+            {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0},
+            {"type": "pause", "duration": 80},
+            {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0},
+        ]}]})
+        wait_for(lambda: self.script("return document.querySelector('[aria-label=\"Copy terminal selection\"]')?.disabled===false;"), "terminal text selection")
+        self.terminal_keys("\ue009c\ue000")
+        text = self.async_script("const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));")
+        require(text == "RELAY_COPY_ME", "Ctrl+C did not copy the selected native terminal text")
+        print("PASS: native text clipboard, Ctrl+V paste and Ctrl+C selection copy", flush=True)
 
     def screenshot(self, destination):
         destination.write_bytes(base64.b64decode(self.call("GET", "/screenshot")))
@@ -403,6 +434,7 @@ def run(args):
                 denied, _ = second.request(input_path, "POST", {"data": "printf 'RELAY_DENIED_INPUT\\n'\r"})
                 require(denied == 409, "Second client bypassed native exclusive control")
                 browser.check_terminal_keys(session)
+                browser.check_terminal_clipboard()
                 browser.terminal_command("printf 'RELAY_%s\\n' 'NATIVE_INPUT_OK'")
                 wait_for(lambda: "RELAY_NATIVE_INPUT_OK" in second.history(session), "native PTY command output")
                 wait_for(lambda: browser.terminal_contains("RELAY_NATIVE_INPUT_OK"), "native terminal paints command output")

@@ -23,7 +23,10 @@ param(
     [string]$FixtureDirectory = '/home/relay',
     [string]$Artifacts = '',
     [switch]$OverrideBundle,
-    [switch]$FrameOnly
+    [switch]$FrameOnly,
+    # Enable only with a disposable account clipboard. This replaces clipboard
+    # contents with fixture text; private clipboard contents are never captured.
+    [switch]$Clipboard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -233,6 +236,10 @@ function Execute-JS([string]$Source, [object[]]$Arguments = @()) {
     return Session-WD POST '/execute/sync' @{ script=$Source; args=$Arguments }
 }
 
+function Execute-AsyncJS([string]$Source, [object[]]$Arguments = @()) {
+    return Session-WD POST '/execute/async' @{ script=$Source; args=$Arguments }
+}
+
 function Find-Element([string]$Using, [string]$Value) {
     $element = Session-WD POST '/element' @{ using=$Using; value=$Value }
     return $element.'element-6066-11e4-a52e-4f735466cecf'
@@ -287,6 +294,33 @@ function Test-DirectTerminalKeys([string]$Session) {
     Send-Terminal "printf 'RELAY_%s\n' 'INTERRUPTED'"
     [void](Wait-Until { Terminal-Contains 'RELAY_INTERRUPTED' } 'Ctrl+C interrupts foreground command' 5)
     Write-Host 'PASS: direct terminal arrows, Backspace, Tab and Ctrl+C'
+}
+
+function Test-TerminalClipboard {
+    $command = "printf 'RELAY_%s\n' 'NATIVE_CLIPBOARD_OK'"
+    $copied = Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.writeText(arguments[0]).then(()=>done(true),()=>done(false));' @($command)
+    Assert-True ($copied -eq $true) 'Native clipboard text write was denied'
+    Send-TerminalKeys ([string][char]0xE009 + 'v' + [char]0xE000)
+    [void](Wait-Until { Terminal-Contains $command } 'Ctrl+V pastes native clipboard text')
+    Assert-True (-not (Terminal-Contains 'RELAY_NATIVE_CLIPBOARD_OK')) 'Pasting text unexpectedly submitted the command'
+    Send-TerminalKeys ([string][char]0xE007)
+    [void](Wait-Until { Terminal-Contains 'RELAY_NATIVE_CLIPBOARD_OK' } 'pasted command executes only after Enter')
+    Send-Terminal "printf '\033[2J\033[HRELAY_COPY_ME\n'"
+    [void](Wait-Until { Execute-JS 'return document.querySelector(".xterm-rows > div")?.textContent.trim()==="RELAY_COPY_ME";' } 'terminal copy fixture')
+    $point = Execute-JS 'const r=document.querySelector(".xterm-rows > div").getBoundingClientRect();return {x:Math.round(r.x+15),y:Math.round(r.y+r.height/2)};'
+    [void](Session-WD POST '/actions' @{ actions=@(@{
+        type='pointer'; id='clipboard-mouse'; parameters=@{pointerType='mouse'}; actions=@(
+            @{type='pointerMove';duration=0;origin='viewport';x=$point.x;y=$point.y},
+            @{type='pointerDown';button=0}, @{type='pointerUp';button=0},
+            @{type='pause';duration=80},
+            @{type='pointerDown';button=0}, @{type='pointerUp';button=0}
+        )
+    }) })
+    [void](Wait-Until { Execute-JS 'return document.querySelector("[aria-label=\"Copy terminal selection\"]")?.disabled===false;' } 'terminal text selection')
+    Send-TerminalKeys ([string][char]0xE009 + 'c' + [char]0xE000)
+    $text = Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));'
+    Assert-True ($text -ceq 'RELAY_COPY_ME') 'Ctrl+C did not copy the selected native terminal text'
+    Write-Host 'PASS: native Windows text clipboard, Ctrl+V paste and Ctrl+C selection copy'
 }
 
 function Send-Setup([string]$Text) {
@@ -704,6 +738,8 @@ try {
     Claim-Terminal
     Assert-True ((API $inputPath POST @{ data="printf 'RELAY_DENIED_INPUT\n'`r" }).Status -eq 409) 'Second client bypassed native writer lease'
     Test-DirectTerminalKeys $remoteSession
+    if ($Clipboard) { Test-TerminalClipboard }
+    else { Write-Host 'SKIP: real Windows clipboard gate requires -Clipboard and a disposable account clipboard' }
     Send-Terminal "printf 'RELAY_%s\n' 'WINDOWS_NATIVE_OK'"
     [void](Wait-Until { Terminal-Contains 'RELAY_WINDOWS_NATIVE_OK' } 'remote output rendered in native WebView2')
     Click-Button 'Release control'

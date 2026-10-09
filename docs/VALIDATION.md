@@ -25,6 +25,31 @@ isolation, terminal control, recovery, and preservation across disconnects.
 WebKit integration, Windows installation/staging, and interactive WebView2
 behavior. Hosted Windows CI does not replace an interactive window/focus test.
 
+## Activity and clipboard coverage
+
+The approval gate covers competing decisions, exact session identity, request
+expiry, hook disconnect, host isolation, controller authentication/CSRF checks,
+hook-token stripping, payload bounds, and absence of persisted tool arguments.
+Provider hook definitions are also parsed by isolated installed CLI builds
+without account login or inference. Real provider execution remains a separate
+manual check; CLI compatibility is reported conservatively at session creation.
+
+Observer tests use a deterministic executable, never a provider account. They
+cover opt-in, capability validation, fixed tool-disabled arguments, environment
+isolation, structured output, process cancellation, model usage limits,
+persistence failure, crash recovery without replay, exact session identity,
+deleted sessions, and bounded visible terminal context. The dashboard tests
+cover offline/unsupported runtimes, stale summaries, explicit configuration,
+and unknown mutation outcomes. These checks do not claim to validate model
+quality or the availability of a model in a particular subscription.
+
+Clipboard regressions exercise ordinary Ctrl+V text paste, selected-text Ctrl+C,
+unselected Ctrl+C interrupts, multiline/bracketed paste, browser clipboard
+round trips, and rejection of delayed paste after focus/control changes. The
+Linux native gate uses a private Xvfb clipboard. Windows native clipboard checks
+require the optional `-Clipboard` gate documented in the desktop README; ordinary
+Windows installer checks do not exercise the user's clipboard.
+
 ## Standalone namespace validation — 2026-10-09
 
 The source uses `github.com/TwoD97/relay`, `cmd/relay`, Relay artifact and storage
