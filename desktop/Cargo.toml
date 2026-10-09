@@ -1,0 +1,36 @@
+[package]
+name = "relay-desktop"
+version = "0.1.0"
+description = "Relay native desktop client"
+authors = ["Tudosa Denys", "Relay contributors"]
+repository = "https://github.com/TwoD97/relay"
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.99"
+
+[workspace]
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.1", features = ["unstable"] }
+tauri-plugin-single-instance = "=2.5.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+url = "=2.5.8"
+open = "=5.4.4"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "ansi"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "=0.18.2"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

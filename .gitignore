@@ -1,0 +1,7 @@
+/dist/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/node_modules/
+/.test-artifacts/
+__pycache__/

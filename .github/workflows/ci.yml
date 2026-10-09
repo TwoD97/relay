@@ -1,0 +1,205 @@
+name: Relay
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci --no-audit --no-fund
+      - run: npx --prefix web playwright install --with-deps chromium
+      - name: Unit, security and desktop/phone browser checks
+        run: |
+          mkdir -p .test-artifacts
+          ./scripts/check.sh 2>&1 | tee .test-artifacts/checks.log
+      - name: Native SSH protocol and authentication checks
+        run: go test -race -tags relay_ssh_native ./internal/transport -count=1 -v -timeout 1m 2>&1 | tee .test-artifacts/native-ssh.log
+      - run: ./scripts/build.sh
+      - run: ./scripts/build-windows-controller.sh
+      - name: Real binary browser checks
+        run: RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts 2>&1 | tee .test-artifacts/live-browser.log
+      - name: Real two-host orchestration, recovery and harness bootstrap
+        env:
+          RELAY_SSH_INTEGRATION: '1'
+          RELAY_SSH_HARNESSES: '1'
+        run: go test -race ./internal/transport -run TestRealSSH -count=1 -v -timeout 10m 2>&1 | tee .test-artifacts/ssh-orchestration.log
+      - name: Retain test results and failure traces
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-verification-evidence
+          include-hidden-files: true
+          path: |
+            .test-artifacts/
+            web/test-results/
+            web/playwright-report/
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-linux-bundle
+          if-no-files-found: error
+          path: dist/relay-linux-bundle.tar.gz
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-windows-controller
+          path: |
+            dist/relay-controller-windows-amd64.exe
+            dist/SHA256SUMS.windows
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install native build and test libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential pkg-config libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb xauth dbus-x11
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy --component rust-docs
+          cargo +1.99.0 install tauri-driver --version 2.1.0 --locked
+      - run: ./scripts/build-desktop.sh
+      - name: Native Rust checks
+        working-directory: desktop
+        run: |
+          cargo fmt --check
+          cargo test --release --locked
+      - name: Native WebKit lifecycle and browser coexistence
+        run: |
+          sudo apt-get install -y "$PWD/dist/relay-desktop-linux-amd64.deb"
+          mkdir -p .test-artifacts/native-linux
+          python3 scripts/test_desktop.py --desktop /usr/bin/relay-desktop --bundle /usr/lib/Relay/runtime --packaged-resources --artifacts .test-artifacts/native-linux 2>&1 | tee .test-artifacts/native-linux.log
+      - name: Retain native Linux evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-native-linux-evidence
+          include-hidden-files: true
+          path: .test-artifacts/
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-desktop-linux-amd64
+          if-no-files-found: error
+          path: dist/relay-desktop-linux-amd64.deb
+          retention-days: 14
+
+  desktop-windows:
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: relay-linux-bundle
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: relay-windows-controller
+          path: dist
+      - name: Prepare runtime bundle and embedded browser assets
+        run: |
+          tar -xzf dist/relay-linux-bundle.tar.gz -C dist
+          if ($LASTEXITCODE -ne 0) { throw 'Extracting the Linux runtime bundle failed.' }
+          npm.cmd --prefix web ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Installing browser dependencies failed.' }
+          npm.cmd --prefix web run build
+          if ($LASTEXITCODE -ne 0) { throw 'Building embedded browser assets failed.' }
+      - name: Native Windows controller and transport checks
+        run: |
+          New-Item -ItemType Directory -Force -Path .test-artifacts | Out-Null
+          $env:RELAY_WINDOWS_TEST_BINARY = (Resolve-Path -LiteralPath dist/relay-controller-windows-amd64.exe).Path
+          go test -count=1 -v ./cmd/relay ./internal/controller ./internal/transport 2>&1 | Tee-Object .test-artifacts/windows-go.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows Go checks failed.' }
+      - name: Windows release staging regressions
+        run: ./scripts/test_windows_build_stage.ps1 2>&1 | Tee-Object .test-artifacts/windows-staging.log
+      - name: Install pinned desktop Rust toolchain
+        working-directory: ${{ runner.temp }}
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy --component rust-docs
+          if ($LASTEXITCODE -ne 0) { throw 'Installing the desktop Rust toolchain failed.' }
+      - name: Generate native Windows dependency notices
+        run: |
+          python scripts/desktop_notices.py --target x86_64-pc-windows-msvc --output desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Generating Windows dependency notices failed.' }
+      - name: Build and verify the native Windows installer
+        run: |
+          ./scripts/build-desktop-windows.ps1 -SourceRoot $PWD.Path -StageRoot (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') -NoticesPath (Join-Path $PWD.Path 'desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt') 2>&1 | Tee-Object .test-artifacts/windows-build.log
+      - name: Install and verify Windows package resources
+        run: ./scripts/test_windows_install.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object .test-artifacts/windows-installed.log
+      - name: Retain native Windows evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-native-windows-evidence
+          include-hidden-files: true
+          path: .test-artifacts/
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-desktop-windows-amd64
+          path: |
+            dist/relay-desktop-windows-amd64-setup.exe
+            dist/relay-desktop-windows-amd64-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14

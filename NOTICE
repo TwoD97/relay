@@ -1,0 +1,13 @@
+Relay
+Copyright 2026 Tudosa Denys and Relay contributors
+https://github.com/TwoD97/relay
+
+Relay's original source is licensed under the Apache License, Version 2.0.
+See LICENSE for the full license text.
+
+Third-party components retain their own licenses and copyright notices.
+See THIRD_PARTY_NOTICES.md and the generated THIRD_PARTY_NOTICES.txt and
+RUST_THIRD_PARTY_NOTICES.txt included with binary distributions.
+
+This notice does not change the licenses of those components or imply
+endorsement by their authors.

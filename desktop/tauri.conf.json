@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Relay",
+  "version": "0.1.0",
+  "identifier": "dev.relay.desktop",
+  "build": {
+    "frontendDist": "assets"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "desktop-frame",
+          "description": "Only the bundled desktop frame can operate its own window and app menu.",
+          "local": true,
+          "webviews": [
+            "chrome",
+            "app-menu"
+          ],
+          "permissions": [
+            "allow-frame-action"
+          ]
+        }
+      ],
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Manage coding agents across your machines",
+    "longDescription": "Relay connects your machines, installs agent tools, and keeps terminal sessions running independently of the desktop window.",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": {
+      "resources/runtime/": "runtime/",
+      "resources/RUST_THIRD_PARTY_NOTICES.txt": "RUST_THIRD_PARTY_NOTICES.txt"
+    }
+  }
+}

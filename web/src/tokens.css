@@ -1,0 +1,12 @@
+:root {
+  color-scheme: dark;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --bg: #141a15;
+  --sidebar: #101611;
+  --text: #e0e7dc;
+  --muted: #899881;
+  --line: #2c3729;
+  --hover: #263124;
+  --accent: #c0ee78;
+}
