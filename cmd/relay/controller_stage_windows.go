@@ -8,6 +8,10 @@ import (
 
 const stagedControllerFilename = "relay-controller.exe"
 
+func stageCreateFile(path string) (*os.File, error) {
+	return openOwnedStateCreation(path, false, windows.CREATE_NEW)
+}
+
 func stageReadFile(path string) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {

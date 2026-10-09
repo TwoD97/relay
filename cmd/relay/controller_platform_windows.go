@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -72,7 +75,17 @@ func privateSecurityDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	if err != nil {
 		return nil, err
 	}
-	return windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + sid.String() + ")(A;OICI;FA;;;SY)")
+	// Elevated tokens may default to Administrators as the owner. Specify the
+	// user's SID at creation, without taking ownership of any existing object.
+	return windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;OICI;FA;;;" + sid.String() + ")(A;OICI;FA;;;SY)")
+}
+
+func privateSecurityAttributes() (*windows.SecurityAttributes, error) {
+	sd, err := privateSecurityDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	return &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}, nil
 }
 
 func secureOwnedHandle(handle windows.Handle) error {
@@ -103,19 +116,29 @@ func secureOwnedHandle(handle windows.Handle) error {
 }
 
 func openOwnedState(path string, directory bool) (*os.File, error) {
+	return openOwnedStateCreation(path, directory, windows.OPEN_ALWAYS)
+}
+
+func openOwnedStateCreation(path string, directory bool, creation uint32) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
 	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE | windows.READ_CONTROL | windows.WRITE_DAC)
-	creation := uint32(windows.OPEN_ALWAYS)
 	flags := uint32(windows.FILE_ATTRIBUTE_NORMAL | windows.FILE_FLAG_OPEN_REPARSE_POINT)
 	if directory {
 		access = windows.READ_CONTROL | windows.WRITE_DAC | windows.FILE_READ_ATTRIBUTES
 		creation = windows.OPEN_EXISTING
 		flags |= windows.FILE_FLAG_BACKUP_SEMANTICS
 	}
-	handle, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, creation, flags, 0)
+	attributes, err := privateSecurityAttributes()
+	if err != nil {
+		return nil, err
+	}
+	// Windows only applies these attributes to a newly created file. Existing
+	// files still have to pass the unchanged owner and reparse-point checks.
+	handle, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, attributes, creation, flags, 0)
+	runtime.KeepAlive(attributes)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +159,7 @@ func openOwnedState(path string, directory bool) (*os.File, error) {
 }
 
 func privateControllerDirectory(path string) error {
-	if err := os.MkdirAll(path, 0700); err != nil {
+	if err := createPrivateControllerParents(filepath.Clean(path)); err != nil {
 		return err
 	}
 	f, err := openOwnedState(path, true)
@@ -144,6 +167,62 @@ func privateControllerDirectory(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+func createPrivateControllerDirectory(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attributes, err := privateSecurityAttributes()
+	if err != nil {
+		return err
+	}
+	err = windows.CreateDirectory(name, attributes)
+	runtime.KeepAlive(attributes)
+	return err
+}
+
+// Like MkdirAll, leave existing ancestors alone. Every missing component gets
+// an explicit owner at creation; the requested state directory is then opened
+// without following a final reparse point and its owner is verified.
+func createPrivateControllerParents(path string) error {
+	err := createPrivateControllerDirectory(path)
+	if err == nil || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil
+	}
+	if !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return err
+	}
+	if err := createPrivateControllerParents(parent); err != nil {
+		return err
+	}
+	err = createPrivateControllerDirectory(path)
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil
+	}
+	return err
+}
+
+func privateControllerTempDirectory(parent string) (string, error) {
+	for range 10 {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", err
+		}
+		path := filepath.Join(parent, fmt.Sprintf(".stage-%x", random))
+		if err := createPrivateControllerDirectory(path); errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+			continue
+		} else if err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+	return "", errors.New("could not reserve a private controller staging directory")
 }
 
 func prepareControllerDirectory(dir string) error {

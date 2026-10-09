@@ -69,6 +69,10 @@ func privateControllerDirectory(path string) error {
 	return os.Chmod(path, 0700)
 }
 
+func privateControllerTempDirectory(parent string) (string, error) {
+	return os.MkdirTemp(parent, ".stage-")
+}
+
 func prepareControllerDirectory(dir string) error {
 	if err := privateControllerDirectory(dir); err != nil {
 		return err

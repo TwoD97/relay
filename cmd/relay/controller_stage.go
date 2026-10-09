@@ -80,7 +80,7 @@ func stageCopyFile(source, destination, expected string) error {
 		return err
 	}
 	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	output, err := stageCreateFile(destination)
 	if err != nil {
 		return err
 	}
@@ -98,6 +98,22 @@ func stageCopyFile(source, destination, expected string) error {
 	closeErr := output.Close()
 	if copyErr != nil {
 		return copyErr
+	}
+	return closeErr
+}
+
+func stageWriteManifest(path string, data []byte) error {
+	file, err := stageCreateFile(path)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
 	}
 	return closeErr
 }
@@ -171,7 +187,7 @@ func stageController(opts uiOptions) (uiOptions, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return opts, err
 	} else {
-		staging, err := os.MkdirTemp(parent, ".stage-")
+		staging, err := privateControllerTempDirectory(parent)
 		if err != nil {
 			return opts, err
 		}
@@ -188,7 +204,7 @@ func stageController(opts uiOptions) (uiOptions, error) {
 			}
 		}
 		if manifest != nil {
-			if err := os.WriteFile(filepath.Join(staging, "SHA256SUMS"), manifest, 0600); err != nil {
+			if err := stageWriteManifest(filepath.Join(staging, "SHA256SUMS"), manifest); err != nil {
 				return opts, err
 			}
 		}

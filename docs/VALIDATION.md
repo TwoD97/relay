@@ -41,6 +41,20 @@ Completed checks:
 - Go module verification and tidy consistency passed.
 - Linux installer regressions: 10 passed.
 - The bundled Relay coordination skill passed its structural validator.
+- Browser regressions: 146 passed, with four live-only cases skipped. The
+  separate real-binary browser run passed all four live cases.
+- Disposable real-SSH and multi-host orchestration passed, including controller
+  restart recovery, writer leases, background maintenance cleanup, and provider
+  binary installation without provider login or inference.
+
+Windows state creation also has native regression coverage for explicit user
+ownership, protected permissions, staged payloads, and concurrent launchers.
+Adversarial tests that create Administrator-owned state require an elevated
+Windows token and are skipped on a standard-user test run.
+
+Current hosted results are available in
+[GitHub Actions](https://github.com/TwoD97/relay/actions). Local results above do
+not imply that every hosted desktop test has passed.
 
 The namespace migration was exercised in isolated state and containers. It did
 not alter any existing personal application installation, saved host profile,

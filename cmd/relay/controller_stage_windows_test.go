@@ -76,6 +76,7 @@ func TestWindowsControllerStageConcurrentAndReadOnlyReuse(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(first.BinaryDir, name)); err != nil {
 			t.Fatal(err)
 		}
+		assertPrivateControllerSecurity(t, filepath.Join(first.BinaryDir, name))
 	}
 	if err := os.Chmod(first.Executable, 0444); err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestWindowsControllerStageCopiesRunningExecutableWithoutBundle(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := uiOptions{Executable: executable, BinaryDir: t.TempDir(), StateDir: t.TempDir()}
+	opts := uiOptions{Executable: executable, BinaryDir: t.TempDir(), StateDir: filepath.Join(t.TempDir(), "private state")}
 	staged, err := stageController(opts)
 	if err != nil {
 		t.Fatal("could not read/copy the currently running PE", err)
