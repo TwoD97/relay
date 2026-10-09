@@ -169,10 +169,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path .test-artifacts | Out-Null
           $env:RELAY_WINDOWS_TEST_BINARY = (Resolve-Path -LiteralPath dist/relay-controller-windows-amd64.exe).Path
-          go test -count=1 -v ./cmd/relay ./internal/controller ./internal/transport 2>&1 | Tee-Object .test-artifacts/windows-go.log
+          go test -count=1 -v ./cmd/relay ./internal/controller ./internal/transport 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-go.log')
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows Go checks failed.' }
       - name: Windows release staging regressions
-        run: ./scripts/test_windows_build_stage.ps1 2>&1 | Tee-Object .test-artifacts/windows-staging.log
+        run: ./scripts/test_windows_build_stage.ps1 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-staging.log')
       - name: Install pinned desktop Rust toolchain
         working-directory: ${{ runner.temp }}
         run: |
@@ -184,9 +184,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Generating Windows dependency notices failed.' }
       - name: Build and verify the native Windows installer
         run: |
-          ./scripts/build-desktop-windows.ps1 -SourceRoot $PWD.Path -StageRoot (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') -NoticesPath (Join-Path $PWD.Path 'desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt') 2>&1 | Tee-Object .test-artifacts/windows-build.log
+          ./scripts/build-desktop-windows.ps1 -SourceRoot $PWD.Path -StageRoot (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') -NoticesPath (Join-Path $PWD.Path 'desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt') 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-build.log')
       - name: Install and verify Windows package resources
-        run: ./scripts/test_windows_install.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object .test-artifacts/windows-installed.log
+        run: ./scripts/test_windows_install.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-installed.log')
       - name: Retain native Windows evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
