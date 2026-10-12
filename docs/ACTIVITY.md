@@ -7,6 +7,41 @@ without restarting the daemon or interrupting existing sessions. A compatible
 new runtime is required, and approval hooks are attached only to newly started
 ordinary Claude Code and Codex sessions.
 
+## Agent launch modes
+
+`POST /api/sessions` accepts optional `agentMode:"manual"|"auto"` for ordinary
+Claude Code and Codex sessions. Omission means Manual for a new agent session.
+Shells reject Auto. New agent records persist `agentMode`; historical records
+without it remain unknown rather than being relabeled. `Harness.sessionModes`
+advertises runtime support. Clients must not send Auto to an older runtime or
+infer its acceptance from a successful response missing the selected mode.
+
+Manual leaves provider permission configuration unchanged. Auto adds the
+documented full-permission launch flag: Claude's `--dangerously-skip-permissions`
+or Codex's `--dangerously-bypass-approvals-and-sandbox`. This is Relay's Auto
+label, not Claude's classifier-based Auto mode or Codex's workspace-limited
+automation settings. A bounded help probe verifies the required flags before
+session creation; unknown flags or failed probes return 422 without a session.
+Provider policy failures remain visible in the terminal with no fallback mode.
+Claude's separately configured command sandbox is preserved; bypassing its
+permission prompts does not disable that sandbox. Codex's full-permission flag
+explicitly bypasses its approval and sandbox layers.
+
+An additional instruction states the user's chosen autonomy, task boundaries,
+and Relay fleet discovery commands. Claude appends it to normal system context;
+Codex receives one literal initial prompt without replacing configured developer
+instructions. Codex may produce an initial response. No shell evaluates the
+instruction, and no project or provider configuration file is overwritten.
+`RELAY_AGENT_MODE` describes a newly created agent's mode; child CLI starts do
+not inherit Auto implicitly. Existing sessions keep their original launch mode.
+
+Auto does not grant OS privileges, create credentials, or override organization
+rules. It does not answer Relay's permission inbox or change hook trust. Session
+badges describe launch settings; `permissions.mode` remains a separately observed
+provider fact when hooks report it. CLI contracts:
+[Codex flags](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and
+[Claude Code flags](https://code.claude.com/docs/en/cli-reference).
+
 ## Permission requests
 
 `GET /api/approvals` returns `{requests:[...]}`. Each request has `id`, `sessionId`,
@@ -41,8 +76,9 @@ Session metadata optionally reports
 `permissions:{support:"configured"|"active"|"terminal-only",detail,mode?,modeObservedAt?}`.
 Configured hooks are not assumed to be trusted or active. A valid authenticated
 hook must connect before integration is reported active. Modes are observed
-facts, not editable policy. Relay does not auto-allow, weaken sandboxing, bypass
-trust, copy credentials, or synthesize terminal keystrokes to answer prompts.
+facts, separate from the selected launch mode. The permission inbox does not
+auto-allow, change sandbox settings, bypass trust, copy credentials, or synthesize
+terminal keystrokes to answer prompts.
 
 Conservative CLI compatibility checks use Claude Code 2.1.209+ or Codex 0.153.4+
 with `hooks` enabled. Codex definitions still require trust in `/hooks`; managed

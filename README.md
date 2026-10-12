@@ -104,6 +104,21 @@ it idle for a minute releases control. Provider hooks report attention separatel
 from the underlying process status. Codex's per-session notification setting is
 used by Relay while that session runs; configuration files are not edited.
 
+For a new Claude Code or Codex session, choose **Manual** or **Auto · full access**.
+Manual keeps the provider's normal permission configuration. Auto explicitly
+requests full tool permissions and adds instructions to complete the user's task
+autonomously, including how to discover named Relay machines. It does not grant
+root access, supply SSH credentials, or override organization policy. Shells use
+the connected OS user's permissions and have no agent mode.
+
+The mode badge records how that session was launched; permissions can still be
+changed inside the provider terminal. Existing sessions keep their launch settings.
+Auto requires an updated running Relay runtime and compatible provider CLI; an
+unsupported CLI is rejected before creating a session. Codex receives the Auto
+instruction as an initial message and may reply before the first task. Claude
+receives it as additional system context. Existing provider/project instructions
+are preserved. See [launch modes](docs/ACTIVITY.md#agent-launch-modes).
+
 ## Fleet overview
 
 The overview brings session status, requests needing attention, and available
@@ -134,8 +149,9 @@ lost replies are not replayed. Existing terminal sessions remain fully usable.
 Approval integration requires a new session on a compatible runtime and provider
 CLI. Relay conservatively checks Claude Code 2.1.209+ or Codex 0.153.4+ with hooks
 enabled. Codex requires reviewing and trusting the definitions in `/hooks`.
-Relay does not bypass hook trust, enable hooks against your configuration, or
-override permission settings. Unsupported prompts (including Claude sandbox
+Relay does not bypass hook trust or enable hooks against your configuration.
+The explicitly selected Auto launch mode sets provider tool permissions; approval
+decisions never change the mode. Unsupported prompts (including Claude sandbox
 network prompts), older CLIs, and untrusted hooks remain in the terminal. See
 [the activity contract](docs/ACTIVITY.md) for exact guarantees and limitations.
 
@@ -160,8 +176,8 @@ project memory or merge provider conversations.
 ## Use from an agent or script
 
 The local session API is also available as a CLI. Commands inside a managed
-session select its owning runtime automatically. These commands never retry a
-mutation or bypass a harness's permission settings.
+session select its owning runtime automatically. Mutations are never retried.
+Agent launch permissions change only when `session start --mode auto` is explicit.
 
 ```sh
 relay session list
@@ -272,13 +288,30 @@ are preserved and shown as a setup warning. The skill can list, start, read,
 send input to, and stop sessions, while respecting the terminal's writer lease.
 Use `$relay` in Codex or `/relay` in Claude Code.
 
-For another Linux machine, session commands accept `--ssh user@host` (or a saved
-SSH alias) and optional `--ssh-port`. The source machine needs its own trusted SSH
+Agents can look up the desktop's machine names with `relay fleet list`, then use
+`--host "Build machine"` on any session command. The controller shares names,
+IDs, resolved SSH addresses, and ports with its connected Linux hosts. It does
+not share keys or authentication. Exact names/IDs are required; conflicting
+matches need `--fleet CONTROLLER_ID`. Identical endpoints shared by multiple
+controllers can resolve together. A self-host match uses the current runtime.
+
+Fleet snapshots refresh once per minute and expire after ten minutes without a
+controller refresh. Host removals replace the current controller's snapshot.
+The desktop resolves SSH aliases before sharing them; unresolved or loopback-only
+destinations remain explicit errors for cross-host lookup. The source machine's
+SSH trust and network access still determine whether it can reach the endpoint.
+
+For another Linux machine outside the fleet, session commands accept
+`--ssh user@host` (or a source-machine SSH alias) and optional `--ssh-port`.
+The source machine needs its own trusted SSH
 key access and an OpenSSH client; a desktop connection does not automatically
 grant credentials to agents on other machines. Prompts travel as HTTP JSON over
 SSH, not interpolated commands. Mutations are never automatically retried.
 
 ```sh
+relay fleet list
+relay session list --host "Build machine"
+relay session start --host "Build machine" --harness claude --mode auto --cwd /srv/app --title "Rollout Agent"
 relay session list --ssh build-host
 relay session read --ssh build-host --id SESSION_ID
 relay session send --ssh build-host --id SESSION_ID --text 'Review the diff.' --enter

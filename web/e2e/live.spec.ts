@@ -357,3 +357,116 @@ for line in sys.stdin:
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("real binary: Manual and Auto reach isolated Claude and Codex PTYs exactly once", async ({ page }) => {
+  test.skip(!binary, "Set RELAY_LIVE_BINARY to a freshly built Relay executable.");
+  test.setTimeout(120000);
+  const executable = resolve(binary!);
+  const temporary = await mkdtemp(join(tmpdir(), "relay-agent-mode-"));
+  const runtimeDir = join(temporary, "runtime");
+  const projectDir = join(temporary, "literal project ' $()");
+  let daemon: ChildProcess | undefined;
+  let client: ChildProcess | undefined;
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await mkdir(join(runtimeDir, "bin"), { recursive: true, mode: 0o700 });
+    await mkdir(projectDir, { mode: 0o700 });
+    // These executables never consult HOME, provider configuration, or the
+    // network. Discovery and help probes do not count as agent launches.
+    const stub = String.raw`#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+provider = pathlib.Path(__file__).name
+root = pathlib.Path(__file__).resolve().parent.parent
+if args == ["--version"]:
+    print("fixture-1.0")
+    sys.exit(0)
+if args == ["--help"]:
+    print("--dangerously-skip-permissions --append-system-prompt --dangerously-bypass-approvals-and-sandbox [PROMPT]")
+    sys.exit(0)
+if args in (["auth", "status"], ["login", "status"]):
+    sys.exit(0)
+identity = os.environ["RELAY_SESSION_ID"]
+capture = {"provider":provider,"args":args,"mode":os.environ.get("RELAY_AGENT_MODE"),"sessionId":identity,"cwd":os.getcwd(),"tty":os.isatty(0) and os.isatty(1)}
+(root / (identity + ".json")).write_text(json.dumps(capture))
+with (root / (provider + "-launches")).open("a") as launches:
+    launches.write(identity + "\n")
+print("RELAY_MODE_FIXTURE_READY", flush=True)
+for line in sys.stdin:
+    print("RELAY_MODE_FIXTURE_INPUT:" + line.strip(), flush=True)
+`;
+    for (const harness of ["claude", "codex"]) await writeFile(join(runtimeDir, "bin", harness), stub, { mode: 0o700 });
+    daemon = spawn(executable, ["daemon", "--state-dir", runtimeDir], { stdio: "ignore" });
+    await expect.poll(() => existsSync(join(runtimeDir, "run", "daemon.sock"))).toBeTruthy();
+    const launch = await startUI(executable, join(temporary, "ui"), runtimeDir);
+    client = launch.process;
+    const origin = new URL(launch.url).origin;
+    const sessionsURL = `${origin}/api/hosts/local/runtime/sessions`;
+    const createdIDs: string[] = [];
+    const providerIDs: Record<string, string[]> = { claude: [], codex: [] };
+    await page.goto(launch.url);
+    for (const harness of ["claude", "codex"] as const) {
+      for (const mode of ["manual", "auto"] as const) {
+        await page.goto(`${origin}/#host/local`);
+        await page.getByRole("button", { name: "New session", exact: true }).first().click();
+        const dialog = page.getByRole("dialog", { name: "Start a session", exact: true });
+        await dialog.getByRole("radio", { name: harness === "claude" ? /Claude Code/ : /Codex/ }).check();
+        await dialog.getByLabel("Project folder").fill(projectDir);
+        const title = `${harness} ${mode} fixture`;
+        await dialog.getByLabel("Session name").fill(title);
+        await expect(dialog.getByRole("radio", { name: "Manual", exact: true })).toBeChecked();
+        if (mode === "auto") await dialog.getByRole("radio", { name: "Auto", exact: true }).check();
+        const responsePromise = page.waitForResponse((response) => response.url() === sessionsURL && response.request().method() === "POST");
+        await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+        const response = await responsePromise;
+        expect(response.status()).toBe(201);
+        expect(response.request().postDataJSON()).toMatchObject({ harness, agentMode: mode, cwd: projectDir });
+        const session = await response.json();
+        expect(session).toMatchObject({ harness, agentMode: mode, cwd: projectDir, title, status: "running" });
+        createdIDs.push(session.id);
+        providerIDs[harness].push(session.id);
+        await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+        await expect.poll(() => existsSync(join(runtimeDir, `${session.id}.json`))).toBeTruthy();
+        const capture = JSON.parse(await readFile(join(runtimeDir, `${session.id}.json`), "utf8"));
+        expect(capture).toMatchObject({ provider: harness, mode, sessionId: session.id, cwd: projectDir, tty: true });
+        const args = capture.args as string[];
+        if (mode === "auto") {
+          const instruction = args.at(-1)!;
+          expect(instruction).toContain("Relay session mode: Auto, explicitly selected by the user");
+          expect(instruction).toContain("If no task has been provided, wait for the user's task.");
+          expect(instruction).toContain('"$relay_cli" fleet list');
+          expect(args.filter((arg) => arg.includes("Relay session mode: Auto"))).toEqual([instruction]);
+          expect(args.slice(-3)).toEqual(harness === "claude"
+            ? ["--dangerously-skip-permissions", "--append-system-prompt", instruction]
+            : ["--dangerously-bypass-approvals-and-sandbox", "--", instruction]);
+        } else {
+          expect(args.some((arg) => arg.includes("dangerously") || arg.includes("Relay session mode: Auto") || arg === "--append-system-prompt")).toBeFalsy();
+        }
+        const badge = `Launch mode: ${mode === "auto" ? "Auto · full access" : "Manual"}`;
+        await expect(page.getByLabel(badge, { exact: true })).toBeVisible();
+        await page.reload();
+        await expect(page.getByLabel(badge, { exact: true })).toBeVisible();
+        const historyURL = `${sessionsURL}/${session.id}/history`;
+        await expect.poll(async () => (await page.request.get(historyURL)).text()).toContain("RELAY_MODE_FIXTURE_READY");
+        await page.getByRole("button", { name: "Take control", exact: true }).click();
+        await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
+        await page.keyboard.type(`still-interactive-${harness}-${mode}`);
+        await page.keyboard.press("Enter");
+        await expect.poll(async () => (await page.request.get(historyURL)).text()).toContain(`RELAY_MODE_FIXTURE_INPUT:still-interactive-${harness}-${mode}`);
+      }
+    }
+    const sessions = await (await page.request.get(sessionsURL)).json();
+    expect(sessions).toHaveLength(4);
+    expect(sessions.map((session: { id: string }) => session.id).sort()).toEqual([...createdIDs].sort());
+    for (const harness of ["claude", "codex"]) {
+      const launches = (await readFile(join(runtimeDir, `${harness}-launches`), "utf8")).trim().split("\n");
+      expect(launches).toEqual(providerIDs[harness]);
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await stop(client);
+    await stop(daemon);
+    await rm(temporary, { recursive: true, force: true });
+  }
+});

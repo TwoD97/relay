@@ -37,10 +37,14 @@ func TestApprovalProxyHostIsolationAndBrowserSecurity(t *testing.T) {
 		}))
 		t.Cleanup(backend.Close)
 		target, _ := url.Parse(backend.URL)
+		s.mu.Lock()
 		s.links[id] = s.makeProxy(func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", target.Host)
 		})
+		s.mu.Unlock()
+		s.store.mu.Lock()
 		s.store.hosts = append(s.store.hosts, Host{ID: id, Status: "online"})
+		s.store.mu.Unlock()
 	}
 	path := ts.URL + "/api/hosts/host-one/runtime/approvals/request/decision"
 	if got := request(t, client, "POST", path, `{}`, "", ts.URL).StatusCode; got != 401 {

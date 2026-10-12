@@ -93,6 +93,20 @@ public static class RelayWindowProbe {
     }, IntPtr.Zero);
     return found;
   }
+  public static string[] OwnedWindows(int processId) {
+    var found = new System.Collections.Generic.List<string>();
+    EnumWindows((window, parameter) => {
+      uint owner; GetWindowThreadProcessId(window, out owner);
+      Rect bounds;
+      if (owner == processId && GetWindowRect(window, out bounds)) {
+        var name = new StringBuilder(256); GetClassName(window, name, name.Capacity);
+        found.Add(String.Format("{0}: visible={1} minimized={2} rect={3},{4},{5},{6} class={7}",
+          window, IsWindowVisible(window), IsIconic(window), bounds.Left, bounds.Top, bounds.Right, bounds.Bottom, name));
+      }
+      return true;
+    }, IntPtr.Zero);
+    return found.ToArray();
+  }
   public static int VisibleConsoles(int[] processIds) {
     int count = 0;
     EnumWindows((window, parameter) => {
@@ -385,6 +399,16 @@ function App-Identity {
     Assert-True (-not ($processes | Where-Object { $_.ProcessId -in $descendants -and $_.Name -eq 'wsl.exe' })) 'Native app unexpectedly launched WSL'
     $matches = @($processes | Where-Object { $_.ProcessId -in $descendants -and
         [string]::Equals($_.ExecutablePath, $script:Desktop, [StringComparison]::OrdinalIgnoreCase) })
+    # Keep facts from this exact identity check for failure evidence. Do not
+    # include general processes, window titles, command lines or login URLs.
+    $script:LastNativeLaunchDiagnostic = @{
+        sampledAt=[DateTimeOffset]::UtcNow.ToString('o'); driverPid=$script:DriverProcess.Process.Id;
+        expectedPath=$script:Desktop; matches=$matches;
+        ownedProcesses=@($processes | Where-Object { $_.ProcessId -in $descendants }); windows=@{}
+    }
+    foreach ($item in $matches) {
+        $script:LastNativeLaunchDiagnostic.windows[[string]$item.ProcessId] = @([RelayWindowProbe]::OwnedWindows($item.ProcessId))
+    }
     if ($matches.Count -ne 1) { return $null }
     $identity = Process-Identity $matches[0].ProcessId $script:Desktop
     $process = Get-Process -Id $identity.Id
@@ -867,6 +891,11 @@ try {
     Test-NormalLaunch
     Write-Host ('Elapsed: {0:N2} seconds; evidence: {1}' -f $clock.Elapsed.TotalSeconds, $Artifacts)
 } catch {
+    if ($LastNativeLaunchDiagnostic) {
+        try {
+            $LastNativeLaunchDiagnostic | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $Artifacts 'owned-launch-diagnostic.json')
+        } catch { }
+    }
     if ($SessionID) { try { Save-FrameTrace } catch { }; try { Save-Screenshot 'failure.png' } catch { } }
     if ($NativeIdentity) { try { Save-NativeWindow $NativeIdentity 'failure-native-window.png' } catch { } }
     Write-Host "Native Windows failure evidence: $Artifacts"

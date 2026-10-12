@@ -210,10 +210,55 @@ func TestSessionCLIRejectsInvalidIdentifiersAndInputBeforeConnecting(t *testing.
 		{"send", "--id", id, "--text", strings.Repeat("x", 64<<10), "--enter"},
 		{"send", "--id", id, "unexpected-positional-text"},
 		{"unknown"},
+		{"start", "--harness", "codex", "--mode", "guess"},
+		{"start", "--harness", "codex", "--mode", ""},
+		{"start", "--mode", "auto"},
+		{"start", "--harness", "shell", "--mode", "manual"},
+		{"list", "--mode", "auto"},
+		{"list", "--fleet", strings.Repeat("a", 32)},
+		{"list", "--host", ""},
+		{"list", "--host", "Build machine", "--ssh", "dev@example.test"},
+		{"list", "--host", "Build machine", "--ssh-port", "0"},
 	} {
 		_, err := runSessionCLI(t, append(args, "--socket", "/tmp/nonexistent-relay-cli-validation.sock")...)
 		if err == nil || strings.Contains(err.Error(), "runtime request failed") {
 			t.Fatalf("invalid arguments reached transport: %v: %v", args[:1], err)
 		}
+	}
+}
+
+func TestSessionCLISendsOnlyExplicitAgentMode(t *testing.T) {
+	for _, mode := range []string{"", "manual", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			var calls atomic.Int32
+			received := make(chan map[string]string, 1)
+			socket := sessionCLISocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Method != "POST" || r.URL.Path != "/api/sessions" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				var body map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				received <- body
+				w.WriteHeader(http.StatusCreated)
+				_, _ = io.WriteString(w, `{"id":"0123456789abcdef0123456789abcdef"}`)
+			}))
+			// Parent autonomy is not implicit authorization to elevate a child.
+			t.Setenv("RELAY_AGENT_MODE", "auto")
+			args := []string{"start", "--socket", socket, "--harness", "codex", "--cwd", "/tmp/project with spaces"}
+			if mode != "" {
+				args = append(args, "--mode", mode)
+			}
+			if _, err := runSessionCLI(t, args...); err != nil {
+				t.Fatal(err)
+			}
+			body := <-received
+			actual, present := body["agentMode"]
+			if actual != mode || present != (mode != "") || calls.Load() != 1 || body["cwd"] != "/tmp/project with spaces" {
+				t.Fatalf("unexpected launch request: %#v, calls=%d", body, calls.Load())
+			}
+		})
 	}
 }

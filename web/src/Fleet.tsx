@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, ArrowUpRight, Bell, BookOpen, Check, CircleAlert, Folder, LoaderCircle, Plus, Server, Settings2, ShieldCheck, Terminal } from "lucide-react";
 import { approvalActionable } from "./Approvals";
 import { ObserverSettings, type ObserverActions } from "./Observer";
+import { AgentModeBadge } from "./AgentMode";
 import { HostStatus } from "./Sidebar";
 import type { FleetState, Host, RuntimeState, Session, SessionSummary } from "./types";
 import "./Fleet.css";
@@ -96,7 +97,7 @@ function WorkCard({ host, session, runtime, controllerError, onOpen, onActivity,
   const summaryCurrent = fresh && !runtime.observerError && !runtime.observer?.error && runtime.observer?.config.enabled;
   const processStatus = !fresh ? "Status unavailable" : session.status === "running" ? "Process running" : session.status === "interrupted" ? "Interrupted" : `Exited${session.exitCode == null ? "" : ` · code ${session.exitCode}`}`;
   return <article className="fleet-work-card" aria-label={`${host.name}: ${session.title}`}>
-    <div className="fleet-work-meta"><span>{host.name} · {agentName(session)}</span><span className={`fleet-process ${!fresh || session.status === "interrupted" ? "is-stale" : ""}`}><i />{processStatus}</span></div>
+    <div className="fleet-work-meta"><span className="fleet-work-source">{host.name} · {agentName(session)}<AgentModeBadge session={session} /></span><span className={`fleet-process ${!fresh || session.status === "interrupted" ? "is-stale" : ""}`}><i />{processStatus}</span></div>
     <h3>{session.title}</h3>{waiting && <p className="fleet-waiting"><ShieldCheck size={13} />Waiting for approval</p>}<p className="fleet-work-path"><Folder size={12} /><span>{session.workspace} · <span className="mono">{session.cwd}</span></span></p>
     {session.harness === "shell" ? <p className="fleet-summary-empty">Shell session. Open the terminal to see its output; shells are excluded from summaries.</p> : <>
       <div className="fleet-snapshot-label"><BookOpen size={13} /><span>{summary?.summary ? stale ? "Earlier snapshot · stale" : "Model-generated snapshot" : !fresh || runtime.observerError ? "Summary state unavailable" : summaryCurrent && summary?.status === "running" ? "Summarizing…" : summaryCurrent && summary?.status === "queued" ? "Summary queued" : summary?.status === "error" ? "Summary unavailable" : summaryStatus(host, runtime)}</span></div>

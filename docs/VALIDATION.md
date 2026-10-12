@@ -72,7 +72,59 @@ Linux native gate uses a private Xvfb clipboard. Windows native clipboard checks
 require the optional `-Clipboard` gate documented in the desktop README; ordinary
 Windows installer checks do not exercise the user's clipboard.
 
-## Desktop release validation — 2026-10-12
+## Fleet names and launch modes — 2026-10-12
+
+Runtime bundle: `0.1.0-dev.50e9fc609217`.
+
+Completed local checks:
+
+- The combined interface suite passed all 230 cases: 222 fixture cases and
+  eight real-binary cases, across desktop and narrow-window viewports, with no
+  failures or skips.
+- Full Go race tests and `go vet ./...` passed across all six tested packages.
+  Native SSH transport race tests also passed.
+- New mode regressions verify exact provider arguments, literal autonomy text,
+  recorded mode and environment, Manual defaults, cancellation before launch,
+  unsupported CLI rejection, and visible provider policy failures without retry
+  or downgrade. Installed Claude Code 2.1.209 and Codex 0.153.4 accepted the
+  required arguments in help-only checks; no model request was made.
+- The real-binary interface mode scenario passed on desktop and narrow-window
+  viewports. Each launched isolated Claude and Codex fixture processes in both
+  Manual and Auto, checked captured arguments and the mode badge after reload,
+  exercised real PTY input, and verified exactly one launch per session.
+- Disposable two-host SSH orchestration passed named-host session start, list,
+  read, input and stop; independent SSH trust, exclusive writer ownership, no
+  replay after uncertain responses, and live PTY preservation through controller
+  disconnect, restart and forced failure. Revision, expiry, ambiguity, removal,
+  stale alias invalidation and source socket selection have separate regressions.
+- The full SSH gate passed background maintenance/recovery and clean managed
+  Codex 0.162.1 and Claude Code 2.1.296 installation without account login or
+  inference. Its two-host binaries preceded the final duplicate-name rejection
+  fix; the final fleet registry race suite verifies that correction separately.
+- Native Windows checks passed: CLI 17, controller 35, SSH transport four, and
+  fleet registry three. The transport cases include isolated SSH alias/user/port
+  resolution. One optional migration and three Linux-only tests were skipped;
+  privilege-specific subtests retain their own platform requirements.
+- Native Rust tests passed on Linux (12) and Windows (11), with formatting and
+  strict Clippy checks. Linux WebKit passed real terminal editing, isolated
+  clipboard, exclusive viewer control, and close/reopen session preservation.
+- The extracted Windows portable payload passed the final isolated
+  `-LaunchOnly` check in 6.09 seconds, including default resources, private
+  authentication, the desktop-only menu and ordinary native startup without
+  WSL, debug switches or a visible console. An initial native-window identity
+  timeout remains unexplained; a diagnostic run and the final run both passed
+  on the same payload. Failure-only process/window diagnostics now preserve
+  evidence for recurrence. The full interactive Windows mouse/clipboard gate
+  was not rerun for this change.
+- Installer regressions passed 10 cases; portable archive regressions passed
+  eight cases on Linux, with the Windows junction case skipped on that platform.
+
+These tests use disposable state, SSH hosts and provider stubs. They do not
+measure model understanding or paid inference. Auto requires a compatible
+running runtime; updating a controller or managed binary does not interrupt
+existing remote sessions to activate a new runtime.
+
+## Previous desktop release validation — 2026-10-12
 
 Runtime bundle: `0.1.0-dev.817b7ea0ab5c`.
 

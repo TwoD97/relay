@@ -61,6 +61,7 @@ type createRequest struct {
 	Workspace string `json:"workspace"`
 	Cwd       string `json:"cwd"`
 	Harness   string `json:"harness"`
+	AgentMode string `json:"agentMode"`
 	Cols      int    `json:"cols"`
 	Rows      int    `json:"rows"`
 }
@@ -92,6 +93,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, errors.New("harness must be shell, claude, or codex"))
 		return
 	}
+	mode, err := normalizedAgentMode(req.Harness, req.AgentMode)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	cwd, err := s.resolveCwd(req.Cwd)
 	if err != nil {
 		fail(w, 400, err)
@@ -117,6 +123,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Harness != "shell" {
+		if mode == "auto" {
+			if err = s.validateAutoAgent(r.Context(), req.Harness, path); err != nil {
+				fail(w, http.StatusUnprocessableEntity, err)
+				return
+			}
+		}
 		executable, exeErr := os.Executable()
 		if exeErr != nil {
 			fail(w, 500, exeErr)
@@ -124,8 +136,18 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		permissions = s.permissionCapability(r.Context(), req.Harness, path)
 		args = permissionHarnessArguments(req.Harness, executable, permissions.Support != "terminal-only")
+		args = agentModeArguments(req.Harness, mode, args)
 	}
-	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, _ io.Writer) (*exec.Cmd, error) { return exec.Command(path, args...), nil })
+	if r.Context().Err() != nil {
+		fail(w, http.StatusRequestTimeout, errors.New("Session preparation was cancelled; no session was started"))
+		return
+	}
+	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, AgentMode: mode, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, out io.Writer) (*exec.Cmd, error) {
+		if mode == "auto" {
+			_, _ = io.WriteString(out, "Relay Auto: requesting full provider permissions for this session. Provider and organization restrictions still apply; startup errors remain in this terminal.\r\n")
+		}
+		return exec.Command(path, args...), nil
+	})
 	if err != nil {
 		fail(w, 409, err)
 		return

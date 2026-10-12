@@ -38,6 +38,18 @@ func (cfg nativeConfig) keyAddress() string {
 }
 
 func resolveNativeConfig(ctx context.Context, cfg Config) (nativeConfig, error) {
+	var readConfig func(context.Context, []string) ([]byte, error)
+	if executable, err := nativeSSHExecutable(); err == nil {
+		readConfig = func(ctx context.Context, args []string) ([]byte, error) {
+			return nativeSSHConfig(ctx, executable, args)
+		}
+	}
+	return resolveNativeConfigWith(ctx, cfg, readConfig)
+}
+
+// Keep OpenSSH execution separate from interpretation so configuration fixtures
+// can use an explicit -F file without reading or changing the user's config.
+func resolveNativeConfigWith(ctx context.Context, cfg Config, readConfig func(context.Context, []string) ([]byte, error)) (nativeConfig, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nativeConfig{}, err
@@ -57,14 +69,14 @@ func resolveNativeConfig(ctx context.Context, cfg Config) (nativeConfig, error) 
 	if cfg.Port > 0 {
 		r.port = cfg.Port
 	}
-	if executable, err := nativeSSHExecutable(); err == nil {
+	if readConfig != nil {
 		configCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		args := []string{"-G", "-o", "CanonicalizeHostname=no", "-o", "PermitLocalCommand=no", "-o", "RemoteCommand=none"}
 		if cfg.Port > 0 {
 			args = append(args, "-p", strconv.Itoa(cfg.Port))
 		}
 		args = append(args, "--", cfg.Target)
-		output, err := nativeSSHConfig(configCtx, executable, args)
+		output, err := readConfig(configCtx, args)
 		cancel()
 		if err != nil {
 			return r, fmt.Errorf("read OpenSSH configuration: %w", err)

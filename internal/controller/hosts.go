@@ -45,6 +45,7 @@ func (s *Server) addHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, err.Error())
 		return
 	}
+	s.fleetChanged()
 	if err := s.beginConnect(h); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -151,6 +152,7 @@ func (s *Server) runConnection(ctx context.Context, h Host, l *link) {
 			s.connectionFailed(h.ID, l, err)
 			return
 		}
+		s.resolveFleetEndpoint(readyCtx, h, conn)
 		s.connectionStage(h.ID, l, "installing", "Checking remote host")
 		installCtx, installCancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer installCancel()
@@ -177,6 +179,7 @@ func (s *Server) runConnection(ctx context.Context, h Host, l *link) {
 		l.httpTransport = p.httpTransport
 		s.store.update(h.ID, "online", "Connected", "")
 		s.mu.Unlock()
+		s.fleetChanged()
 		release()
 		select {
 		case <-ctx.Done():
@@ -277,6 +280,7 @@ func (s *Server) forgetHost(w http.ResponseWriter, r *http.Request) {
 			l.httpTransport.CloseIdleConnections()
 		}
 	}
+	s.fleetChanged()
 	w.WriteHeader(204)
 }
 

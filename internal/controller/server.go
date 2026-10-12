@@ -52,6 +52,7 @@ type Server struct {
 	repairSlots                     chan struct{}
 	maintenance                     *maintenanceStore
 	maintenanceWG                   sync.WaitGroup
+	fleet                           *fleetPublisher
 }
 
 func New(cfg Config) (*Server, error) {
@@ -74,6 +75,11 @@ func New(cfg Config) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
 	s.maintenance = maintenance
+	s.fleet, err = newFleetPublisher(s)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	s.connectSlots = make(chan struct{}, 4)
 	s.repairSlots = make(chan struct{}, 2)
 	s.startConnection = cfg.startConnection
@@ -121,6 +127,8 @@ func New(cfg Config) (*Server, error) {
 		})
 	}
 	s.handler = s.secure(s.audit(mux))
+	go s.fleet.loop()
+	s.fleetChanged()
 	s.ReconnectSaved()
 	s.maintenanceWG.Add(1)
 	go s.monitorMaintenance()
@@ -150,6 +158,9 @@ func (s *Server) Close() error {
 	}
 	s.connectWG.Wait()
 	s.maintenanceWG.Wait()
+	if s.fleet != nil {
+		<-s.fleet.done
+	}
 	return nil
 }
 

@@ -92,7 +92,7 @@ export function App() {
     </main>
     {addHost && <AddHost onClose={() => setAddHost(false)} onCreated={(target) => { setAddHost(false); setSetupHost(target); navigate({ host: target.id }); refresh(); }} />}
     {setupHost && <SetupHost host={state.hosts.find((target) => target.id === setupHost.id) ?? setupHost} onClose={() => setSetupHost(null)} onOpen={() => { navigate({ host: setupHost.id }); setSetupHost(null); refresh(); }} onRetry={() => reconnect(setupHost)} />}
-    {newSession && <NewSession host={state.hosts.find((target) => target.id === newSession.id) ?? newSession} harnesses={state.runtimes[newSession.id]?.harnesses ?? []} existing={visibleState.runtimes[newSession.id]?.sessions ?? []} onClose={() => setNewSession(null)} onCreated={(current, notice) => openedSession(newSession, current, notice)} />}
+    {newSession && <NewSession host={state.hosts.find((target) => target.id === newSession.id) ?? newSession} harnesses={state.runtimes[newSession.id]?.harnesses ?? []} capabilitiesCurrent={!state.error && !state.runtimes[newSession.id]?.harnessesError} existing={visibleState.runtimes[newSession.id]?.sessions ?? []} onClose={() => setNewSession(null)} onCreated={(current, notice) => openedSession(newSession, current, notice)} />}
     {confirmation && <Confirm title={confirmation.title} description={confirmation.description} action={confirmation.action} onClose={() => setConfirmation(null)} onConfirm={confirmation.confirm} />}
     {toast && <div role="status" className="toast"><Check size={16} /><span>{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={14} /></button></div>}
   </div>;

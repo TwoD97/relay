@@ -43,7 +43,7 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	case "help", "--help", "-h":
-		fmt.Println("Relay is a desktop application. Open the Relay app to manage your fleet.\n\nrelay [session|project-context|daemon|ensure|bridge|version]\n\nsession  List, start, read, send input to, or stop a session\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
+		fmt.Println("Relay is a desktop application. Open the Relay app to manage your fleet.\n\nrelay [session|fleet|project-context|daemon|ensure|bridge|version]\n\nsession  List, start, read, send input to, or stop a session\nfleet    List saved Relay machine names and resolved SSH endpoints\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
 		return nil
 	case "ui":
 		return serveUI(args)
@@ -61,6 +61,8 @@ func run(args []string) error {
 		return notifyRuntime(args)
 	case "session":
 		return sessionCommand(args)
+	case "fleet":
+		return fleetCommand(args)
 	case "project-context":
 		return projectContextCommand(args)
 	case "daemon", "ensure", "bridge", "harness-maintain":

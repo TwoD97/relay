@@ -1,11 +1,11 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import type { Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, Session } from "../src/types";
+import type { AgentMode, Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, Session } from "../src/types";
 
 export const local: Host = { id: "local", name: "This computer", target: "local", port: 0, status: "online", stage: "Local runtime", createdAt: "2026-10-07T08:00:00Z" };
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; maintenanceJobs?: MaintenanceJob[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
@@ -117,6 +117,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     if (suffix === "runtime/harnesses") {
       if (options.hangHarnesses?.includes(hostId)) return;
       const harnesses: Harness[] = [{ id: "shell", name: "Shell", installed: true }, { id: "claude", name: "Claude Code", installed: false }, { id: "codex", name: "Codex", installed: true, version: "codex-cli 1.0.0", authenticated: true }];
+      for (const harness of harnesses) if (options.sessionModes?.[harness.id]) harness.sessionModes = options.sessionModes[harness.id];
       if (!options.legacyRuntime) for (const harness of harnesses.filter((h) => h.id !== "shell")) harness.management = { supportedActions: ["install", "update", "repair"], source: harness.installed ? "external" : "missing", strategy: harness.id === "claude" ? "native" : "npm", detail: "A verified Relay-managed release is used for new sessions. Existing installations and sign-in are preserved." };
       return json(harnesses);
     }

@@ -55,10 +55,37 @@ atomically switch the managed launcher. Same-harness maintenance conflicts retur
 managed replacement without modifying external binaries or provider credentials.
 `POST /api/harnesses/{id}/login`: -> Session for provider login PTY.
 
-Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,permissions?,purpose?,processIdentity?,recovery?}`.
+Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,permissions?,agentMode?,purpose?,processIdentity?,recovery?}`.
 `purpose:"login"` identifies an ephemeral provider-login transcript: memory only
 while active, cleared on exit, and never persisted as terminal history.
 Attention: `{kind:"completed"|"notification"|"permission",source,updatedAt}`.
+
+Ordinary agent creation accepts `agentMode:"manual"|"auto"`, advertised through
+`Harness.sessionModes`. Omission preserves provider-default launch behavior.
+Auto explicitly selects full provider tool permissions and adds a bounded,
+literal autonomy instruction; unsupported CLI flags reject creation. It does
+not change existing sessions or grant OS/SSH authority. The persisted field
+records launch choice, independently of hook-observed permission state. See
+[ACTIVITY.md](ACTIVITY.md#agent-launch-modes) for the provider contract.
+
+Named fleet discovery is an agent CLI capability, independent of runtime HTTP
+support. The controller publishes bounded, private snapshots beside each
+connected host's runtime at `<state>/fleet/<controllerId>.json`. Snapshots carry
+display names, IDs, resolved SSH user/hostname/port, source identity, revision,
+and a ten-minute expiry. They contain no credentials or SSH configuration files.
+The source identity and increasing revision persist across controller restarts;
+complete snapshots replace removed hosts and reject delayed older revisions.
+Refresh is asynchronous on fleet changes and once per minute.
+
+`relay fleet list` reports these sources, including stale ones. Session commands
+accept exact `--host NAME_OR_ID` and optional `--fleet CONTROLLER_ID`; stale,
+unresolved and conflicting matches fail before session mutation. The source host
+uses its owning runtime socket. Other hosts use the resolved endpoint through
+the caller's existing SSH trust/authentication and the fixed Relay bridge.
+Loopback endpoints are not portable between hosts. Discovery does not create
+SSH trust, copy credentials, or authorize a session operation. Raw `--ssh`
+remains available for destinations outside the saved fleet.
+
 Optional approval and observer routes are specified in [ACTIVITY.md](ACTIVITY.md).
 Older runtimes may return 404 for these capabilities without becoming incompatible.
 Status is evidence-based `running|exited|interrupted`; do not fabricate agent approval

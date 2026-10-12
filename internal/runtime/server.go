@@ -41,6 +41,7 @@ type Session struct {
 	Workspace       string           `json:"workspace"`
 	Cwd             string           `json:"cwd"`
 	Harness         string           `json:"harness"`
+	AgentMode       string           `json:"agentMode,omitempty"`
 	Status          string           `json:"status"`
 	CreatedAt       time.Time        `json:"createdAt"`
 	UpdatedAt       time.Time        `json:"updatedAt"`
@@ -176,6 +177,9 @@ func (s *Server) load() error {
 	for _, meta := range stored.Sessions {
 		if !validID(meta.ID) || s.sessions[meta.ID] != nil || validateLabel(meta.Title, 120) != nil || validateLabel(meta.Workspace, 80) != nil || !validHarness(meta.Harness) {
 			return errors.New("invalid saved session metadata")
+		}
+		if meta.AgentMode != "" && (meta.Harness == "shell" || meta.AgentMode != "manual" && meta.AgentMode != "auto") {
+			return errors.New("invalid saved agent mode")
 		}
 		if meta.Status != "running" && meta.Status != "exited" && meta.Status != "interrupted" {
 			return errors.New("invalid saved session status")

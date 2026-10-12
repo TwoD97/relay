@@ -19,6 +19,7 @@ export interface Host {
 }
 
 export type HarnessId = "shell" | "claude" | "codex";
+export type AgentMode = "manual" | "auto";
 export type HarnessAction = "install" | "login" | "update" | "repair";
 export interface MaintenanceJob {
   id: string;
@@ -56,6 +57,7 @@ export interface Session {
   workspace: string;
   cwd: string;
   harness: HarnessId;
+  agentMode?: AgentMode;
   purpose?: HarnessAction;
   status: "running" | "exited" | "interrupted";
   createdAt: string;
@@ -73,6 +75,7 @@ export interface Harness {
   version?: string;
   authenticated?: boolean;
   authDetail?: string;
+  sessionModes?: AgentMode[];
   management?: {
     supportedActions: ("install" | "update" | "repair")[];
     source: "relay" | "external" | "missing";

@@ -360,6 +360,8 @@ func (s *Server) run(ctx context.Context, p *liveSession, factory commandFactory
 	cmd.Env = setEnv(cmd.Env, "RELAY_SOCKET", filepath.Join(s.stateDir, "run", "daemon.sock"))
 	cmd.Env = setEnv(cmd.Env, "RELAY_SESSION_ID", p.meta.ID)
 	cmd.Env = setEnv(cmd.Env, "RELAY_EVENT_TOKEN", p.eventToken)
+	// Never inherit a parent agent's Auto choice for another session.
+	cmd.Env = setEnv(cmd.Env, "RELAY_AGENT_MODE", p.meta.AgentMode)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: p.cols, Rows: p.rows})
 	if err != nil {
 		p.mu.Unlock()

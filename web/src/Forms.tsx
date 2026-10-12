@@ -4,7 +4,8 @@ import { api, errorMessage, hostPath } from "./api";
 import { Modal } from "./Modal";
 import { FolderPicker } from "./FolderPicker";
 import { Terminal } from "./LazyTerminal";
-import type { Harness, HarnessId, Host, Session } from "./types";
+import { AgentModePicker } from "./AgentMode";
+import type { AgentMode, Harness, HarnessId, Host, Session } from "./types";
 
 export function InlineError({ error }: { error: string | null | undefined }) {
   return error ? <div role="alert" className="inline-error"><CircleAlert size={16} /><span>{error}</span></div> : null;
@@ -35,7 +36,7 @@ export function AddHost({ onClose, onCreated }: { onClose: () => void; onCreated
   </Modal>;
 }
 
-export function NewSession({ host, harnesses, existing, onClose, onCreated }: { host: Host; harnesses: Harness[]; existing: Session[]; onClose: () => void; onCreated: (session: Session, notice?: string) => void }) {
+export function NewSession({ host, harnesses, capabilitiesCurrent, existing, onClose, onCreated }: { host: Host; harnesses: Harness[]; capabilitiesCurrent: boolean; existing: Session[]; onClose: () => void; onCreated: (session: Session, notice?: string) => void }) {
   const mounted = useRef(true);
   const submitting = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -44,13 +45,20 @@ export function NewSession({ host, harnesses, existing, onClose, onCreated }: { 
   const [workspace, setWorkspace] = useState(latest?.workspace || "My workspace");
   const [cwd, setCwd] = useState(latest?.cwd || "");
   const [harness, setHarness] = useState<HarnessId>("shell");
+  const [agentMode, setAgentMode] = useState<AgentMode>("manual");
   const [sharedContext, setSharedContext] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const options: { id: HarnessId; name: string; description: string }[] = [{ id: "shell", name: "Terminal", description: "Your remote shell" }, { id: "claude", name: "Claude Code", description: "Anthropic" }, { id: "codex", name: "Codex", description: "OpenAI" }];
+  const modes = capabilitiesCurrent && host.status === "online" ? harnesses.find((item) => item.id === harness)?.sessionModes : undefined;
+  const latestSupport = useRef({ modes, status: host.status });
+  latestSupport.current = { modes, status: host.status };
+  const autoSupported = modes?.includes("auto") === true;
+  const unsupportedChoice = harness !== "shell" && agentMode === "auto" && !autoSupported;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (submitting.current) return;
+    if (unsupportedChoice) { setError("Auto is not currently supported on this machine. Choose Manual or wait for verified support."); return; }
     submitting.current = true;
     setBusy(true); setError(null);
     try {
@@ -60,7 +68,11 @@ export function NewSession({ host, harnesses, existing, onClose, onCreated }: { 
         notice = ["Shared project context is ready.", ...(prepared.warnings ?? [])].join(" ");
       }
       if (!mounted.current) return;
-      const created = await api.createSession(host.id, { title: title.trim() || options.find((item) => item.id === harness)!.name, workspace: workspace.trim(), cwd, harness });
+      if (latestSupport.current.status !== "online") throw new Error("Reconnect this machine before starting a session.");
+      if (harness !== "shell" && agentMode === "auto" && !latestSupport.current.modes?.includes("auto")) throw new Error("Auto support could not be verified. No session was started. Choose Manual or wait for verified support.");
+      const recordedMode = harness !== "shell" && latestSupport.current.modes?.includes(agentMode) ? agentMode : undefined;
+      const created = await api.createSession(host.id, { title: title.trim() || options.find((item) => item.id === harness)!.name, workspace: workspace.trim(), cwd, harness, ...(recordedMode ? { agentMode: recordedMode } : {}) });
+      if (recordedMode && created.agentMode !== recordedMode) notice = [notice, "The session started, but its runtime did not confirm the requested launch mode. Check the terminal; Relay has not repeated the launch."].filter(Boolean).join(" ");
       if (mounted.current) onCreated(created, notice);
     }
     catch (error) { setError(errorMessage(error)); setBusy(false); }
@@ -70,14 +82,15 @@ export function NewSession({ host, harnesses, existing, onClose, onCreated }: { 
     <form className="modal-body form-stack" onSubmit={(event) => void submit(event)}>
       <fieldset className="harness-picker" disabled={busy}><legend>Run</legend><div className="harness-options">{options.map((option) => {
         const available = option.id === "shell" || harnesses.some((item) => item.id === option.id && item.installed);
-        return <label key={option.id} className={`harness-option ${harness === option.id ? "selected" : ""} ${!available ? "unavailable" : ""}`}><input type="radio" name="harness" value={option.id} checked={harness === option.id} disabled={!available} onChange={() => setHarness(option.id)} /><TerminalIcon size={18} /><strong>{option.name}</strong><small>{available ? option.description : "Install first"}</small></label>;
+        return <label key={option.id} className={`harness-option ${harness === option.id ? "selected" : ""} ${!available ? "unavailable" : ""}`}><input type="radio" name="harness" value={option.id} checked={harness === option.id} disabled={!available} onChange={() => { setHarness(option.id); setAgentMode("manual"); }} /><TerminalIcon size={18} /><strong>{option.name}</strong><small>{available ? option.description : "Install first"}</small></label>;
       })}</div></fieldset>
+      {harness !== "shell" && <AgentModePicker value={agentMode} onChange={setAgentMode} autoSupported={autoSupported} current={capabilitiesCurrent && host.status === "online"} disabled={busy} />}
       <FolderPicker key={host.id} host={host} value={cwd} onChange={setCwd} disabled={busy} />
       {harness !== "shell" && <label className="shared-context-option"><input type="checkbox" checked={sharedContext} disabled={busy} onChange={(event) => setSharedContext(event.target.checked)} /><span><strong>Shared instructions and memory</strong><small>Connect both agents to AGENTS.md, MEMORY.md and HANDOFF.md in this folder. Existing content is kept. Native chat histories stay separate.</small></span></label>}
       <label className="field"><span>Workspace <span className="required">*</span></span><input disabled={busy} required maxLength={80} list="workspace-names" value={workspace} onChange={(event) => setWorkspace(event.target.value)} /><datalist id="workspace-names">{[...new Set(existing.map((session) => session.workspace))].map((name) => <option key={name} value={name} />)}</datalist><small>Group related sessions together in the sidebar.</small></label>
       <label className="field"><span>Session name</span><input disabled={busy} maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What are you working on?" /></label>
       <InlineError error={error} />
-      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || !cwd.trim() || !workspace.trim() || host.status !== "online"}>{busy ? <LoaderCircle className="spin" size={16} /> : <TerminalIcon size={16} />}{busy ? "Starting…" : "Start session"}</button></div>
+      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || unsupportedChoice || !cwd.trim() || !workspace.trim() || host.status !== "online"}>{busy ? <LoaderCircle className="spin" size={16} /> : <TerminalIcon size={16} />}{busy ? "Starting…" : "Start session"}</button></div>
     </form>
   </Modal>;
 }

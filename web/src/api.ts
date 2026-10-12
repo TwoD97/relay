@@ -1,4 +1,4 @@
-import type { Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
+import type { AgentMode, Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -74,7 +74,7 @@ export const api = {
   connect: (host: string) => request(hostPath(host, "connect"), { method: "POST" }),
   disconnect: (host: string) => request(hostPath(host, "disconnect"), { method: "POST" }),
   forget: (host: string) => request(hostPath(host), { method: "DELETE" }),
-  createSession: (host: string, data: { title: string; workspace: string; cwd: string; harness: string }) => request<Session>(runtimePath(host, "sessions"), { method: "POST", body: JSON.stringify(data) }),
+  createSession: (host: string, data: { title: string; workspace: string; cwd: string; harness: string; agentMode?: AgentMode }) => request<Session>(runtimePath(host, "sessions"), { method: "POST", body: JSON.stringify(data) }),
   deleteSession: (host: string, session: string) => request(runtimePath(host, `sessions/${encodeURIComponent(session)}`), { method: "DELETE" }),
   acknowledgeAttention: (host: string, session: string) => request(runtimePath(host, `sessions/${encodeURIComponent(session)}/attention/ack`), { method: "POST" }),
   harnessAction: (host: string, harness: string, action: HarnessAction, viaController = false) => request<Session>((viaController ? hostPath : runtimePath)(host, `harnesses/${encodeURIComponent(harness)}/${action}`), { method: "POST", ...(viaController ? { signal: AbortSignal.timeout(190000) } : {}) }),

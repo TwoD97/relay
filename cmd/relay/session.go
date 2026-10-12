@@ -16,7 +16,8 @@ import (
 )
 
 // sessionCommand gives agents and scripts the same local runtime API as the UI.
-// It does not bypass provider permissions or replay an uncertain mutation.
+// Explicit launch modes select provider permissions; uncertain mutations are
+// never replayed.
 func sessionCommand(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: relay session list|start|read|send|stop [options]")
@@ -30,8 +31,11 @@ func sessionCommand(args []string) error {
 	socket := f.String("socket", defaultSocket, "Runtime Unix socket (defaults to the owning session's runtime)")
 	sshHost := f.String("ssh", "", "Use an already trusted SSH alias or user@host with existing key authentication")
 	sshPort := f.Int("ssh-port", 0, "SSH port (zero respects SSH configuration)")
+	fleetHost := f.String("host", "", "Exact machine name or ID from relay fleet list")
+	fleetID := f.String("fleet", "", "Controller ID to select when fleet machine names are ambiguous (requires --host)")
 	id := f.String("id", "", "Session ID for read, send, or stop")
 	harness := f.String("harness", "shell", "shell, claude, or codex")
+	mode := f.String("mode", "", "Agent launch mode for start: manual (provider defaults) or auto (full tool permissions)")
 	cwd := f.String("cwd", "~", "Existing project directory")
 	workspace := f.String("workspace", "Default", "Workspace name")
 	title := f.String("title", "Terminal", "Session title")
@@ -43,16 +47,39 @@ func sessionCommand(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments; use --id and --text")
 	}
+	provided := make(map[string]bool)
+	f.Visit(func(option *flag.Flag) { provided[option.Name] = true })
+	if provided["mode"] {
+		if action != "start" || (*mode != "manual" && *mode != "auto") {
+			return errors.New("--mode is only valid for session start and must be manual or auto")
+		}
+		if *harness != "claude" && *harness != "codex" {
+			return errors.New("--mode requires --harness claude or codex; shell sessions use the operating system's permissions")
+		}
+	}
+	if provided["fleet"] && (!provided["host"] || *fleetID == "") {
+		return errors.New("--fleet requires --host and a nonempty controller ID")
+	}
+	if provided["host"] {
+		if *fleetHost == "" || provided["ssh"] || provided["ssh-port"] {
+			return errors.New("--host requires a machine name or ID and cannot be combined with --ssh or --ssh-port")
+		}
+		host, err := resolveFleetHost(*fleetHost, *fleetID, *socket)
+		if err != nil {
+			return err
+		}
+		if !host.Self {
+			*sshHost, *sshPort = host.Target, host.Port
+		}
+	}
 	if err := validateSessionSSH(*sshHost, *sshPort); err != nil {
 		return err
 	}
 	if *sshHost == "" && !localRuntimeSupported {
 		return errors.New("local sessions require Linux; use --ssh to control a Linux host from Windows")
 	}
-	if *sshHost != "" {
-		var explicitSocket bool
-		f.Visit(func(option *flag.Flag) { explicitSocket = explicitSocket || option.Name == "socket" })
-		if explicitSocket {
+	if *sshHost != "" && !provided["host"] {
+		if provided["socket"] {
 			return errors.New("--ssh uses the remote user's Relay runtime; do not combine it with --socket")
 		}
 	}
@@ -62,7 +89,11 @@ func sessionCommand(args []string) error {
 	case "list":
 	case "start":
 		method = "POST"
-		body = map[string]string{"harness": *harness, "cwd": *cwd, "workspace": *workspace, "title": *title}
+		create := map[string]string{"harness": *harness, "cwd": *cwd, "workspace": *workspace, "title": *title}
+		if provided["mode"] {
+			create["agentMode"] = *mode
+		}
+		body = create
 	case "read", "send", "stop":
 		decoded, err := hex.DecodeString(*id)
 		if err != nil || len(decoded) != 16 {
@@ -101,6 +132,11 @@ func sessionCommand(args []string) error {
 		}
 	}
 	timeout := 15 * time.Second
+	if action == "start" {
+		// Auto capability checks and permission adapter probes are bounded but
+		// can together exceed the ordinary read timeout on a slow host.
+		timeout = 30 * time.Second
+	}
 	if *sshHost != "" {
 		timeout = 45 * time.Second
 	}

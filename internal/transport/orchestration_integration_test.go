@@ -64,7 +64,8 @@ func TestRealSSHMultiHostOrchestration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.hosts = append(f.hosts, orchestrationHost{id: id, alias: alias, port: port})
+		ip := strings.TrimSpace(string(f.run(f.docker, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", id)))
+		f.hosts = append(f.hosts, orchestrationHost{id: id, alias: alias, port: port, ip: ip})
 	}
 	f.source, f.worker = f.hosts[0], f.hosts[1]
 	controllerKey := filepath.Join(dir, "controller_key")
@@ -83,8 +84,10 @@ func TestRealSSHMultiHostOrchestration(t *testing.T) {
 			return err == nil && len(strings.Fields(string(key))) >= 2
 		})
 		parts := strings.Fields(string(key))
-		fmt.Fprintf(&known, "[127.0.0.1]:%s %s %s\n", host.port, parts[0], parts[1])
-		fmt.Fprintf(&config, "Host %s\n HostName 127.0.0.1\n Port %s\n User relay\n IdentityFile %s\n IdentitiesOnly yes\n IdentityAgent none\n PreferredAuthentications publickey\n UserKnownHostsFile %s\n GlobalKnownHostsFile /dev/null\n StrictHostKeyChecking yes\n", host.alias, host.port, controllerKey, filepath.Join(dir, "known_hosts"))
+		// This fixture uses its private Docker network address: controller-only
+		// loopback port forwards are intentionally not portable fleet addresses.
+		fmt.Fprintf(&known, "%s %s %s\n", host.ip, parts[0], parts[1])
+		fmt.Fprintf(&config, "Host %s\n HostName %s\n Port 22\n User relay\n IdentityFile %s\n IdentitiesOnly yes\n IdentityAgent none\n PreferredAuthentications publickey\n UserKnownHostsFile %s\n GlobalKnownHostsFile /dev/null\n StrictHostKeyChecking yes\n", host.alias, host.ip, controllerKey, filepath.Join(dir, "known_hosts"))
 	}
 	f.writeLocal("ssh_config", []byte(config.String()), 0600)
 	f.writeLocal("known_hosts", []byte(known.String()), 0600)
@@ -101,7 +104,7 @@ func TestRealSSHMultiHostOrchestration(t *testing.T) {
 	f.writeRemote(f.worker, ".ssh/authorized_keys", authorized, "600")
 	workerKey := f.run(f.docker, "exec", f.worker.id, "cat", "/etc/ssh/ssh_host_ed25519_key.pub")
 	wrongHostKey := f.run(f.docker, "exec", f.source.id, "cat", "/etc/ssh/ssh_host_ed25519_key.pub")
-	f.writeRemote(f.source, ".ssh/known_hosts", []byte("worker "+string(workerKey)), "600")
+	f.writeRemote(f.source, ".ssh/known_hosts", []byte("worker "+string(workerKey)+f.worker.ip+" "+string(workerKey)), "600")
 	f.writeRemote(f.source, ".ssh/wrong_hosts", []byte("worker "+string(wrongHostKey)), "600")
 	f.writeRemote(f.source, ".ssh/config", []byte(`Host worker bad-host-key bad-auth dropped-response
  HostName worker
@@ -120,16 +123,20 @@ Host dropped-response
  IdentityFile ~/.ssh/fault_key
 Host worker
  IdentityFile ~/.ssh/source_key
-`), "600")
+`+"Host "+f.worker.ip+"\n IdentityFile ~/.ssh/source_key\n IdentitiesOnly yes\n IdentityAgent none\n"), "600")
 	f.writeRemote(f.worker, "drop-response", []byte("#!/bin/sh\nset -eu\nprintf 'call\\n' >> \"$HOME/dropped-response.calls\"\nexec \"$HOME/.local/share/relay/bin/relay\" bridge >/dev/null\n"), "700")
 	f.buildBundle()
-	f.writeLocal("state/hosts.json", []byte(`[{"id":"source","name":"Source","target":"source"},{"id":"worker","name":"Worker","target":"worker"}]`), 0600)
+	f.writeLocal("state/hosts.json", []byte(`[{"id":"source","name":"Source","target":"source"},{"id":"worker","name":"Mynet Docker Live","target":"worker"}]`), 0600)
 	app := f.launch()
 	f.waitOnline(app)
 	for _, host := range f.hosts {
 		f.remote(host, "sh", "-c", `test -s "$HOME/.agents/skills/relay/SKILL.md" && test -s "$HOME/.claude/skills/relay/SKILL.md"`)
 	}
-	t.Log("controller bootstrapped two isolated hosts and installed the shared agent skill")
+	f.until("friendly fleet directory on source host", 15*time.Second, func() bool {
+		data, err := f.remoteResult(f.source, orchestrationCLI, "fleet", "list")
+		return err == nil && bytes.Contains(data, []byte(`"name":"Mynet Docker Live"`)) && bytes.Contains(data, []byte(`"target":"relay@`+f.worker.ip+`"`))
+	})
+	t.Log("controller bootstrapped two isolated hosts and published friendly names with resolved user/host/port, without copying SSH authorization")
 
 	const title = "same-name worker ' $()"
 	parent := f.start(app, "source", title)
@@ -229,7 +236,7 @@ Host worker
 	}
 	// Finish the delegation from the parent PTY, not from the controller. Stopping
 	// the child must leave its same-named parent running on the other host.
-	f.send(recovered, "source", parent.ID, orchestrationCLI+" session stop --ssh worker --id "+child.ID+`; printf 'PARENT_%s\n' CHILD_STOPPED`)
+	f.send(recovered, "source", parent.ID, orchestrationCLI+" session stop --host 'Mynet Docker Live' --id "+child.ID+`; printf 'PARENT_%s\n' CHILD_STOPPED`)
 	f.waitHistory(recovered, "source", parent.ID, "PARENT_CHILD_STOPPED")
 	if children := f.sessions(recovered, "worker"); len(children) != 0 {
 		t.Fatalf("parent did not stop its child: %+v", children)
@@ -247,27 +254,27 @@ Host worker
 const orchestrationParentScript = `#!/bin/sh
 set -eu
 cli="$HOME/.local/share/relay/bin/relay"
-child=$("$cli" session start --ssh worker --harness shell --cwd /home/relay --workspace Orchestration --title "same-name worker ' \$()")
+child=$("$cli" session start --host 'Mynet Docker Live' --harness shell --cwd /home/relay --workspace Orchestration --title "same-name worker ' \$()")
 id=$(printf '%s\n' "$child" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p')
 test -n "$id"
 printf 'CHILD_ID=%s\n' "$id"
 attempt=0
 while :; do
-  history=$("$cli" session read --ssh worker --id "$id")
+  history=$("$cli" session read --host 'Mynet Docker Live' --id "$id")
   [ -n "$history" ] && break
   attempt=$((attempt + 1)); [ "$attempt" -lt 60 ]; sleep 0.1
 done
-"$cli" session send --ssh worker --id "$id" --text 'export RELAY_CHILD_STATE=child-alive; printf "%s\n" "$PPID" > "$HOME/runtime.pid"; printf "RESULT=%s\n" "$((6*7))"' --enter
+"$cli" session send --host 'Mynet Docker Live' --id "$id" --text 'export RELAY_CHILD_STATE=child-alive; printf "%s\n" "$PPID" > "$HOME/runtime.pid"; printf "RESULT=%s\n" "$((6*7))"' --enter
 attempt=0
 while :; do
-  history=$("$cli" session read --ssh worker --id "$id")
+  history=$("$cli" session read --host 'Mynet Docker Live' --id "$id")
   if printf '%s' "$history" | grep -q 'RESULT=42'; then break; fi
   attempt=$((attempt + 1)); [ "$attempt" -lt 60 ]; sleep 0.1
 done
 printf 'PARENT_%s=%s\n' ACK 42
 `
 
-type orchestrationHost struct{ id, alias, port string }
+type orchestrationHost struct{ id, alias, port, ip string }
 type orchestrationSession struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
@@ -320,6 +327,9 @@ func (f *orchestrationFixture) remote(host orchestrationHost, args ...string) []
 }
 func (f *orchestrationFixture) cli(alias string, args ...string) ([]byte, error) {
 	argv := append([]string{orchestrationCLI, "session"}, args...)
+	if alias == "worker" {
+		return f.remoteResult(f.source, append(argv, "--host", "Mynet Docker Live")...)
+	}
 	return f.remoteResult(f.source, append(argv, "--ssh", alias)...)
 }
 func (f *orchestrationFixture) cliOK(alias string, args ...string) []byte {
