@@ -75,7 +75,7 @@ test("late terminal decision never steals navigation", async ({ page }) => {
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
   release();
   await expect.poll(() => fixture.mutations.length).toBe(1);
-  await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
   expect(calls).toBe(1);
 });
 

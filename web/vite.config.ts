@@ -11,7 +11,7 @@ export default defineConfig({
         response.statusCode = 503;
         response.setHeader("Content-Type", "application/json");
         response.setHeader("Cache-Control", "no-store");
-        response.end(JSON.stringify({ error: "This is Relay's UI preview server. Use Open in Browser in the Relay desktop menu, or start the full controller with relay ui, to connect to your machines." }));
+        response.end(JSON.stringify({ error: "This is Relay's UI preview server for development. Open the Relay desktop app to connect to your machines." }));
       });
     },
   }],

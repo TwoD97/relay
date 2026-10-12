@@ -173,7 +173,7 @@ class WebDriver:
 
     def check_frame(self):
         current = self.call("GET", "/window")
-        checked = False
+        checked = menu_checked = False
         try:
             for handle in self.call("GET", "/window/handles"):
                 self.call("POST", "/window", {"handle": handle})
@@ -182,9 +182,14 @@ class WebDriver:
                     require(size["height"] == 40 and size["width"] >= 390,
                             "GTK custom title bar has incorrect geometry")
                     checked = True
+                if self.call("GET", "/url") == "tauri://localhost/menu.html":
+                    require(self.script("return [...document.querySelectorAll('[data-action]')].map(button=>button.dataset.action);") == ["reload", "reconnect", "close"],
+                            "Desktop menu contains an unexpected browser action")
+                    menu_checked = True
         finally:
             self.call("POST", "/window", {"handle": current})
         require(checked, "Trusted custom title bar was not created")
+        require(menu_checked, "Trusted desktop-only menu was not created")
 
     def terminal_contains(self, text):
         return self.script("const rows = document.querySelector('.xterm-rows'); return !!rows && rows.textContent.includes(arguments[0]);", text)
@@ -401,7 +406,7 @@ def run(args):
                 wait_for(lambda: tcp_ready(port), "tauri-driver startup")
                 browser = WebDriver(port, native_port)
                 browser.start(desktop)
-                wait_for(lambda: browser.body_contains("A home for your fleet.") and
+                wait_for(lambda: browser.script("return document.querySelector('.page-heading h1')?.textContent==='Fleet overview';") and
                          browser.body_contains("This computer"), "native fleet rendering", 60)
                 browser.check_frame()
                 identity = controller_identity(control_socket)
@@ -454,7 +459,7 @@ def run(args):
                 current = second.json("/api/hosts/local/runtime/sessions")
                 require(current[0]["id"] == session and current[0]["status"] == "running", "Session did not survive native closure")
                 browser.start(desktop)
-                wait_for(lambda: browser.body_contains("A home for your fleet.") and
+                wait_for(lambda: browser.script("return document.querySelector('.page-heading h1')?.textContent==='Fleet overview';") and
                          browser.body_contains("This computer"), "reopened native fleet", 60)
                 require(controller_identity(control_socket) == identity, "Reopening native app replaced the shared controller")
                 browser.call("POST", "/url", {"url": second.origin + "/#host/local/session/" + session})

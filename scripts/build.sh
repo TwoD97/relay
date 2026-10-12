@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 RELAY_GO="${RELAY_GO:-go}"
 command -v "$RELAY_GO" >/dev/null || { echo 'Go 1.26+ is required (or set RELAY_GO to the Go executable).' >&2; exit 1; }
-command -v npm >/dev/null || { echo 'Node.js 22+ and npm are required to build the browser UI.' >&2; exit 1; }
+command -v npm >/dev/null || { echo 'Node.js 22+ and npm are required to build the embedded interface.' >&2; exit 1; }
 npm --prefix web ci --no-audit --no-fund
 npm --prefix web run build
 RELAY_SOURCE_HASH=$(python3 - <<'PY'
@@ -36,4 +36,4 @@ cp docs/CONTRACT.md docs/VALIDATION.md docs/SHARED_CONTEXT.md docs/ACTIVITY.md d
 RELAY_GO="$RELAY_GO" python3 scripts/notices.py
 printf '%s\n' "$RELAY_VERSION" > dist/VERSION
 tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf dist/relay-linux-bundle.tar.gz relay-linux-amd64 relay-linux-arm64 SHA256SUMS VERSION install.sh README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.txt docs
-printf 'Built Relay %s. Run dist/install.sh, then ~/.local/bin/relay ui.\n' "$RELAY_VERSION"
+printf 'Built Relay %s. Runtime and agent CLI bundle ready. Build the desktop app with scripts/build-desktop.sh.\n' "$RELAY_VERSION"

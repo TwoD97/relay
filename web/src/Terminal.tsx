@@ -69,7 +69,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
         try { copied = document.execCommand("copy"); } catch { /* Report below. */ }
         field.remove();
         if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
-        if (!copied) setNote("Clipboard access was denied. Select text and use the browser's Copy command.");
+        if (!copied) setNote("Clipboard access was denied. Select text and use the system Copy command.");
       };
       if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(fallback);
       else fallback();
@@ -87,7 +87,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
         // when navigator.clipboard is unavailable. xterm owns the paste event.
         let pasted = false;
         try { pasted = document.execCommand("paste"); } catch { /* Report below. */ }
-        if (!pasted) setNote("Clipboard access was denied. Use the browser's Paste command or Shift+Insert.");
+        if (!pasted) setNote("Clipboard access was denied. Try the system Paste command or Shift+Insert.");
       };
       if (navigator.clipboard?.readText) {
         void navigator.clipboard.readText().then((text) => {

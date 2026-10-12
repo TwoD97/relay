@@ -28,18 +28,18 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     // bootstrap facts on the next request, but never replay this mutation.
     if (response.status === 401 || response.status === 403) { csrf = ""; bootstrapPending = null; }
     const raw = await response.text();
-    if (response.headers.get("Content-Type")?.includes("text/html")) throw new ApiError("Relay's API returned a web page. Open Relay from the desktop app's Open in browser menu, or start its controller with relay ui." + (mutation ? " The action may have completed; check the machine before trying again." : ""), response.status);
+    if (response.headers.get("Content-Type")?.includes("text/html")) throw new ApiError("Relay received an unexpected page from its local service. Choose Reconnect in the Relay menu." + (mutation ? " The action may have completed; check the machine before trying again." : ""), response.status);
     let message = raw || `Request failed (${response.status}).`;
     try {
       const parsed = JSON.parse(raw) as { error?: string | { message?: string }; message?: string };
       message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message || parsed.message || message;
     } catch { /* A plain-text diagnostic is valid too. */ }
-    throw new ApiError(response.status === 401 ? "This browser is not connected to your Relay controller." : message, response.status);
+    throw new ApiError(response.status === 401 ? "Relay lost its local connection. Choose Reconnect in the Relay menu." : message, response.status);
   }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   if (response.headers.get("Content-Type")?.includes("text/html") || /^\s*</.test(text)) {
-    throw new ApiError("Relay's API returned a web page. Open Relay from the desktop app's Open in browser menu, or start its controller with relay ui." + (mutation ? " The action may have completed; check the machine before trying again." : ""), 502);
+    throw new ApiError("Relay received an unexpected page from its local service. Choose Reconnect in the Relay menu." + (mutation ? " The action may have completed; check the machine before trying again." : ""), 502);
   }
   try { return text ? JSON.parse(text) as T : undefined as T; }
   catch { throw new ApiError("Relay returned an invalid API response. Check the controller connection." + (mutation ? " The action may have completed; check the machine before trying again." : ""), 502); }

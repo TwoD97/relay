@@ -1,13 +1,21 @@
 # Relay desktop
 
-The native application opens the same Relay interface as the browser client in a
-Tauri v2 window. Windows x64 uses WebView2 and a native Windows controller and SSH
+Relay is a desktop application with an embedded interface in a Tauri v2 window.
+Windows x64 uses WebView2 and a native Windows controller and SSH
 client; WSL is not required. Linux amd64 and arm64 use WebKitGTK. Linux packages
 also work inside WSLg.
 
-Install `relay-desktop-windows-amd64-setup.exe` on Windows and open **Relay** from
-the Start menu. The installer operates for the current user and provides an
-uninstaller. It installs WebView2 if that runtime is missing. Coding harnesses
+For portable Windows use, extract `relay-desktop-windows-amd64-portable.zip` and
+open `Relay/relay-desktop.exe`. Keep the whole folder together. No Relay installer,
+administrator access, Microsoft account, or Relay account is required. WebView2
+must be available; Windows 11 includes it and most Windows 10 computers have it.
+The ZIP's `README.txt` links to Microsoft's runtime download when it is missing.
+Settings remain in the private Windows account directories, so the ZIP is an
+installation-free application, not a roaming archive of credentials or hosts.
+
+Alternatively, install `relay-desktop-windows-amd64-setup.exe` and open **Relay**
+from the Start menu. The installer operates for the current user, provides an
+uninstaller, and installs WebView2 if it is missing. Coding harnesses
 and terminal sessions run on the connected Linux hosts; local Windows PTYs are
 not implemented. Windows SSH supports direct connections, aliases, private keys,
 the Windows OpenSSH agent, passphrases, and passwords. ProxyJump and ProxyCommand
@@ -21,13 +29,13 @@ Starting the default desktop app again focuses its existing window.
 The dark title bar replaces the native title and menu bars. Drag its center to
 move the window, double-click to maximize or restore, and use the right-hand
 buttons to minimize, maximize, or close. The **relay.** button opens the application
-menu with Reload, Reconnect, Open in Browser, and Quit. Keyboard shortcuts remain
-Ctrl+R, Ctrl+Shift+R, Ctrl+Shift+B, and Ctrl+Q. Open in
-Browser obtains a fresh one-time sign-in link for the default browser. Reconnect
-also renews authentication after a controller restart. The webview retains its
+menu with Reload, Reconnect, and Quit. Keyboard shortcuts are Ctrl+R,
+Ctrl+Shift+R, and Ctrl+Q. Reconnect renews the embedded client's authentication
+after a controller restart. Relay has no browser-workspace menu or shortcut.
+The embedded view retains its
 standard text selection and clipboard shortcuts. In a terminal, Ctrl+V or
-Ctrl+Shift+V pastes text from this computer's clipboard; Cmd+V works in a Mac
-browser. Ctrl+C copies selected terminal text, or sends an interrupt when nothing
+Ctrl+Shift+V pastes text from this computer's clipboard. Ctrl+C copies selected
+terminal text, or sends an interrupt when nothing
 is selected. Ctrl+Shift+C always means copy. The terminal's Copy and Paste
 buttons provide the same actions. Ctrl+Alt+V sends a literal Ctrl+V to a remote
 application that needs that key, including an agent's own image-paste command.
@@ -81,7 +89,21 @@ Then run `scripts/build-desktop-windows.ps1 -SourceRoot PATH_TO_REPOSITORY
 -NoticesPath PATH_TO_WINDOWS_NOTICES` in Windows PowerShell. It stages sources on
 a native Windows drive, checks payload hashes and versions, runs Rust tests and
 Clippy, and produces `dist/relay-desktop-windows-amd64-setup.exe` with a SHA256
-sidecar. Build prerequisites are Rust 1.99.0, Node.js 22+, and the Visual Studio
+sidecar. Add `-Portable` to build only the ZIP and its checksum without invoking
+NSIS. The mode still verifies all three runtime binaries and runs native checks.
+The archive has `Relay/relay-desktop.exe`, adjacent `runtime/`, public and
+third-party notices, launch instructions, and a checksum for every payload file.
+Only the explicit resource allowlist is copied; build caches and account data
+cannot be included accidentally.
+
+After an installer build, create a ZIP from the same compiled stage without
+recompilation:
+
+```powershell
+python scripts/package_desktop_windows.py --stage C:\path\to\relay-desktop-build --output dist/relay-desktop-windows-amd64-portable.zip --replace
+```
+
+Build prerequisites are Python 3, Rust 1.99.0, Node.js 22+, and the Visual Studio
 C++ build tools/Windows SDK. The current installer is unsigned.
 
 The build stage must be separate from the checkout and starts empty on first
@@ -103,6 +125,15 @@ Development and disposable test overrides:
 These overrides do not change HOME or provider authentication. Parallel isolated
 test runs should also use separate XDG data/cache/config directories for WebKit.
 The wrapper never downloads or replaces tools itself.
+
+The Windows resource directory resolves relative to the executable, so the
+extracted folder works from another directory without installation or PATH
+changes. The controller state stays under `%LOCALAPPDATA%\RelayData`, and the
+embedded WebView2 profile stays under `%LOCALAPPDATA%\dev.relay.desktop`.
+The GUI executable shows a native startup message if it cannot create its window,
+including complete-folder and WebView2 guidance. It does not install prerequisites
+or change security policy automatically. Unsigned builds remain subject to normal
+Windows and organization policy.
 
 ## Launch and security boundary
 
@@ -156,10 +187,18 @@ Windows account and checks the installed payloads and native shortcut. The full
 interactive Windows gate is `test_windows_desktop.ps1`; it requires a matching
 WebView2 driver and a disposable Linux SSH host. Hosted Windows CI does not claim
 to cover native mouse/focus behavior; run that interactive gate before shipping.
+Its `-LaunchOnly` mode needs no SSH fixture and checks an extracted app's default
+resources, embedded fleet, private authentication, and ordinary native launch.
+It uses isolated state and a separate WebView2 profile, disables single-instance
+activation for that test, and does not send mouse/keyboard input or access the
+clipboard. Cleanup is scoped to its own process identities.
 Pass `-Clipboard` with a disposable Windows account clipboard to additionally
 check native text copy/paste. This replaces clipboard contents with test text
 and never captures the account's previous clipboard. The Linux gate always
 checks copy/paste using its isolated Xvfb clipboard.
+`python scripts/test_portable_package.py -v` checks archive integrity, required
+resources, corruption, private-file exclusion, symbolic links, and Windows
+junctions using disposable files only.
 
 Tauri API references used by this wrapper:
 [window navigation](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html),

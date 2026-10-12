@@ -1,10 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
+import { promisify } from "node:util";
 
 const binary = process.env.RELAY_LIVE_BINARY;
 
@@ -18,17 +19,37 @@ async function stop(child: ChildProcess | undefined) {
 }
 
 async function startUI(executable: string, stateDir: string, runtimeDir: string, local = true) {
-  const process = spawn(executable, ["ui", "--listen", "127.0.0.1:0", "--state-dir", stateDir, "--runtime-dir", runtimeDir, ...(local ? [] : ["--local=false"])], { stdio: ["ignore", "pipe", "pipe"] });
+  const options = ["--listen", "127.0.0.1:0", "--state-dir", stateDir, "--runtime-dir", runtimeDir, `--local=${local}`];
+  const process = spawn(executable, ["ui", "--no-login-link", ...options], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
+  // The foreground child is owned by this test. Tauri's private bootstrap mints
+  // the one-time authentication URL only after that same controller is ready.
+  // No mutation is retried, and no public browser-launch command is needed.
+  process.stderr?.resume();
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("The disposable Relay controller did not become ready.")), 20000);
     process.stdout?.on("data", (chunk) => {
       output += String(chunk);
-      const match = output.match(/http:\/\/127\.0\.0\.1:\d+\/auth\?token=[A-Za-z0-9_-]+/);
-      if (match) { clearTimeout(timer); resolve(match[0]); }
+      if (output.length > 65536) { clearTimeout(timer); reject(new Error("The disposable controller exceeded its startup output limit.")); return; }
+      const match = output.match(/controller ready at (http:\/\/127\.0\.0\.1:\d+)/);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
     });
     process.once("error", (error) => { clearTimeout(timer); reject(error); });
     process.once("exit", (code) => { clearTimeout(timer); reject(new Error(`Disposable Relay controller exited with code ${code}.`)); });
+  }).then(async (origin) => {
+    let stdout: string;
+    try {
+      ({ stdout } = await promisify(execFile)(executable, ["desktop", ...options], { timeout: 20000, maxBuffer: 65536 }));
+    } catch {
+      // An execFile error may contain its stdout, including the private token.
+      throw new Error("The disposable desktop authentication bootstrap failed.");
+    }
+    let launch: { pid: number; address: string; url: string; protocol: number };
+    try { launch = JSON.parse(stdout); } catch { throw new Error("The disposable desktop bootstrap returned invalid JSON."); }
+    if (launch.pid !== process.pid || launch.address !== origin || launch.protocol !== 1) throw new Error("Desktop bootstrap did not reuse the test-owned controller.");
+    const parsed = new URL(launch.url);
+    if (parsed.origin !== origin || parsed.pathname !== "/auth" || !parsed.searchParams.get("token")) throw new Error("Desktop bootstrap returned an invalid private authentication URL.");
+    return launch.url;
   }).catch(async (error) => { await stop(process); throw error; });
   return { process, url };
 }
@@ -53,7 +74,7 @@ test("real binary: shell, exclusive viewer, controller restart and finished-sess
     const launch = await startUI(executable, stateDir, runtimeDir);
     client = launch.process;
     await page.goto(launch.url);
-    await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("live-fleet.png"), fullPage: true });
     await page.locator(".machine-card").filter({ hasText: "This computer" }).click();
     await page.getByRole("button", { name: "New session", exact: true }).first().click();
@@ -201,7 +222,7 @@ test("one-time sign-in link works when clicked from an external site", async ({ 
     expect(metadata["sec-fetch-site"]).toBe("cross-site");
     expect(metadata["sec-fetch-mode"]).toBe("navigate");
     expect(metadata["sec-fetch-dest"]).toBe("document");
-    await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
     await expect(page).toHaveTitle("Relay · Your fleet");
     const state = await page.request.get(`${new URL(launch.url).origin}/api/state`);
     expect(state.ok()).toBeTruthy();

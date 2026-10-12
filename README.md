@@ -1,68 +1,68 @@
 # Relay
 
-A personal workspace for coding agents across your machines. Add an SSH host,
-sign in through its terminal, and Relay installs its Linux runtime without sudo.
-Keep Claude Code, Codex, and shell sessions together in the browser or native
-desktop app. Sessions survive browser and SSH disconnects.
+A personal desktop workspace for coding agents across your machines. Add an SSH
+host, sign in through its terminal, and Relay installs its Linux runtime without
+sudo. Keep Claude Code, Codex, and shell sessions together; remote sessions
+continue when you close the app.
 
 Built with Go, React, and Tauri. Licensed under [Apache 2.0](LICENSE).
 
-## Desktop and browser clients
+## Desktop app
 
-The desktop app uses the same interface, hosts, and sessions as the browser.
-On Windows x64, install `relay-desktop-windows-amd64-setup.exe`, then open
-**Relay** from the Start menu. The Windows window, local controller, and SSH
-client run natively; WSL is not required. Windows clients manage Linux SSH hosts.
-Local Windows terminal sessions are not implemented.
+Relay is a desktop product. The Tauri shell renders the interface using its
+embedded WebView; there is no separate browser client or Relay account to sign
+into. Its private local controller starts and authenticates the window
+automatically. Provider accounts and SSH still use their normal authentication.
+
+On Windows x64, extract the **portable ZIP** to a writable folder and run
+`relay-desktop.exe`. Keep the adjacent resources with the executable. No Relay
+installer, administrator access, or WSL is needed. The Microsoft WebView2 runtime
+must already be available. Alternatively, use the current-user Windows installer
+and open **Relay** from the Start menu. Windows clients manage Linux SSH hosts;
+local Windows terminal sessions are not implemented.
+
+Portable means installation-free: settings remain private to your Windows user
+under `%LOCALAPPDATA%\RelayData` so existing saved machines are reused. The ZIP
+does not contain credentials, user settings, or provider accounts. Windows may
+still check or warn about unsigned downloads; portable packaging does not bypass
+Defender or SmartScreen. See Microsoft's [WebView2 distribution guidance](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
+and [SmartScreen app reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
 
 On Linux and WSLg, open **Relay** from your application launcher or run
-`relay-desktop`. It starts the local controller automatically. The native
-**Relay → Open in Browser** menu opens a separately authenticated browser view;
-both clients can be used together. Closing either view leaves agent sessions
-running. **Reconnect** obtains a fresh connection after a controller restart.
-
-Opening the desktop or browser reconnects saved hosts, with at most four SSH
-setups at a time. Already connected hosts are reused. Passwords and new host-key
-decisions still require attention in the host's setup terminal; passwords are
-never saved. A failed login is not retried in a background loop.
+`relay-desktop`. Closing the window leaves remote sessions running. **Relay →
+Reconnect** restores the window's local connection after a controller restart.
+Saved hosts reconnect automatically, with at most four SSH setups at a time.
+Passwords and new host-key decisions still require attention in the host's setup
+terminal; passwords are never saved. Failed logins are not retried in a loop.
 
 The desktop has a dark custom title bar with dragging, minimize, maximize,
 restore, close, and a Relay menu. Its trusted frame is separate from the app
 content; no filesystem or shell APIs are exposed to either view. SSH and process
 management stay in the controller/runtime.
 
+## Build from source
+
+Build requirements: Go 1.26+, Node.js 22+, npm, Python 3, Bash, OpenSSH, and the
+platform's native Tauri prerequisites. Remote hosts need Linux amd64/arm64, a
+POSIX shell, OpenSSH server, and `sha256sum`.
+
 ```sh
+git clone https://github.com/TwoD97/relay.git
+cd relay
 ./scripts/build-desktop.sh
 sudo apt install "$(pwd)/dist/relay-desktop-linux-amd64.deb"
 relay-desktop
 ```
 
-Build prerequisites and native test commands are in `desktop/README.md`.
-Native packages target Windows x64 and Linux amd64/arm64, including WSLg.
-Windows and Linux desktop apps each expose their own authenticated loopback
-browser view through **Relay → Open in Browser**.
+Windows packaging, native dependencies, and test commands are documented in
+[desktop/README.md](desktop/README.md). `scripts/build.sh` and `dist/install.sh`
+produce/install the runtime and agent CLI bundle; they do not launch a browser.
+The HTTP interface is an internal part of the desktop app, with loopback-only
+binding, one-time window authentication, and cookie/CSRF checks retained.
 
-## Build and start the browser client
+## Connect and work
 
-Build requirements: Go 1.26+, Node.js 22+, npm, Python 3, Bash, and OpenSSH client.
-Clients run on Linux or WSL; remote hosts need Linux amd64/arm64, a POSIX shell,
-OpenSSH server, and `sha256sum`.
-
-```sh
-git clone https://github.com/TwoD97/relay.git
-cd relay
-./scripts/build.sh
-./dist/install.sh
-~/.local/bin/relay ui
-```
-
-Open the private login link printed by the command. The UI listens only on
-`127.0.0.1:7340`; each link signs in once and then disappears from the address bar.
-Run `relay ui` again to issue a fresh link without interrupting connected clients.
-WSL users can open the link in their Windows browser. Use `--listen 127.0.0.1:7341`
-if the default port is occupied.
-
-The local computer is available immediately. To connect another machine, choose
+The local computer is available immediately on Linux. To connect another machine, choose
 **Add host**, enter a saved SSH alias or `user@hostname`, and complete any password,
 key-passphrase, or new host-key prompt in the SSH terminal. Check the displayed
 host fingerprint against a trusted source before accepting a new host. Existing
@@ -98,11 +98,29 @@ text; Ctrl+Shift+C/V also copy and paste. Pasted text respects bracketed-paste
 mode. Touch screens retain a small row for keys absent from their keyboard.
 
 Opening a terminal watches it. Clicking or focusing it claims available exclusive
-typing and resize access; **Take control** also remains available. Other tabs
+typing and resize access; **Take control** also remains available. Other desktop windows
 continue watching and cannot take an occupied lease. Closing the view or leaving
 it idle for a minute releases control. Provider hooks report attention separately
 from the underlying process status. Codex's per-session notification setting is
 used by Relay while that session runs; configuration files are not edited.
+
+## Fleet overview
+
+The overview brings session status, requests needing attention, and available
+summaries into one workspace. Open a session directly, review a permission
+request, or start work on a connected machine. Each machine shows agent readiness
+and its summary configuration. Loading, unavailable, and cached state are labeled
+separately from an empty machine.
+
+Relay lists sessions managed by its runtime; it does not import unrelated SSH
+shells, tmux sessions, or provider conversation histories. A running session
+means its process is alive, not that the agent is necessarily working. Provider
+completion notifications report a finished turn, not completion of your project.
+
+Summaries can show reported steps, possible blockers, and suggested next steps.
+These are model snapshots, not a synchronized provider todo list. Their source
+session and sampling time remain visible. Enable summaries explicitly for a
+machine to use its signed-in provider account.
 
 ## Permissions and session summaries
 
@@ -153,10 +171,10 @@ relay session send --id SESSION_ID --text 'Run the tests' --enter
 relay session stop --id SESSION_ID
 ```
 
-`session stop` terminates and removes that terminal. Browser control must be
+`session stop` terminates and removes that terminal. Desktop terminal control must be
 released before another client uses `session send`.
 
-## Install the client bundle
+## Install the runtime and agent CLI bundle
 
 Keep both architecture binaries and `SHA256SUMS` together: the client sends the
 matching runtime to a remote host. The install script validates the complete bundle
@@ -164,11 +182,11 @@ and installs a versioned client plus a `~/.local/bin/relay` command.
 
 ```sh
 ./dist/install.sh
-~/.local/bin/relay ui
+~/.local/bin/relay help
 ```
 
-If invoking the binary through a separate symlink or copied location, use
-`ui --binaries /path/to/the/complete/bundle` to select remote artifacts.
+The desktop distributions already include the matching runtime bundle. Keep all
+portable resources together; copying the executable alone is not supported.
 
 ## Persistence and upgrades
 
@@ -206,7 +224,7 @@ every five seconds. A hard crash may lose output since the last checkpoint.
 Installations upload to a private temporary file, verify SHA-256 on both ends,
 rename atomically, and verify runtime health before activating the bridge. A
 running runtime with the same API protocol can be reused across client builds,
-so a desktop or browser update does not stop its sessions. An incompatible
+so a desktop update does not stop its sessions. An incompatible
 runtime protocol causes an explicit error. Finish and close sessions before
 intentionally stopping the old daemon and reconnecting with a new build. The
 controller itself requires a matching client build. Opening an updated desktop
@@ -272,14 +290,12 @@ CSRF tokens on mutations. SSH passwords stay in the SSH process; Relay never sav
 them. Do not expose the loopback UI through a public reverse proxy: this build is a
 single-user local client, not a hosted multi-user service.
 
-Phone layouts are supported when accessing the client through a trusted private
-tunnel that preserves the loopback endpoint. A hosted multi-user service and
-push notifications are not included.
+The interface adapts to narrow desktop windows. Browser-based UI tests exercise
+this embedded interface; they are not a separate browser product.
 
 Check `daemon.log` for startup failures. An offline host can be reconnected from
 the host menu. A failed mutation is not automatically retried: inspect session
-state before repeating it. Run `relay help` and `relay ui --help` for
-configuration flags.
+state before repeating it. Run `relay help` for agent CLI commands.
 
 ## Validation
 
@@ -288,7 +304,7 @@ configuration flags.
 # Native SSH protocol fixtures and real disposable two-host orchestration:
 go test -race -tags relay_ssh_native ./internal/transport -count=1 -timeout 1m
 RELAY_SSH_INTEGRATION=1 go test -race ./internal/transport -run TestRealSSH -count=1 -v -timeout 10m
-# Browser against the actual built controller/runtime:
+# Embedded interface against the actual built controller/runtime:
 RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts
 ```
 

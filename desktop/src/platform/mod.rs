@@ -11,7 +11,8 @@ mod windows;
 
 #[cfg(target_os = "windows")]
 pub use windows::{
-    configure_frame, controller_command, default_local, shell_error_url, validate_bundle,
+    configure_frame, controller_command, default_local, shell_error_url, show_startup_failure,
+    validate_bundle,
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

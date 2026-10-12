@@ -68,13 +68,13 @@ func parseUIOptions(command string, args []string) (uiOptions, error) {
 		defaultAddress = "127.0.0.1:0"
 	}
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
-	f.StringVar(&opts.Address, "listen", defaultAddress, "Loopback address when starting a new browser controller")
+	f.StringVar(&opts.Address, "listen", defaultAddress, "Loopback address when starting a new desktop controller")
 	f.StringVar(&opts.StateDir, "state-dir", defaultDir("relay-client"), "Private saved host directory")
 	f.StringVar(&opts.RuntimeDir, "runtime-dir", defaultDir("relay"), "Local runtime data directory")
 	f.StringVar(&opts.BinaryDir, "binaries", filepath.Dir(exe), "Directory with Linux runtime binaries and SHA256SUMS")
 	f.BoolVar(&opts.Local, "local", localRuntimeSupported, "Include this computer's persistent runtime")
 	if command == "ui" {
-		f.BoolVar(&opts.NoLoginLink, "no-login-link", false, "Do not print a login secret; local launchers issue their own links")
+		f.BoolVar(&opts.NoLoginLink, "no-login-link", false, "Internal desktop controller process; no login link is printed")
 	}
 	if err = f.Parse(args); err != nil {
 		return opts, err

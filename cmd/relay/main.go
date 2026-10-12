@@ -1,4 +1,4 @@
-// Relay has a local browser controller and an independently owned PTY daemon.
+// Relay has a native desktop controller and an independently owned PTY daemon.
 package main
 
 import (
@@ -33,7 +33,7 @@ func main() {
 }
 
 func run(args []string) error {
-	command := "ui"
+	command := "help"
 	if len(args) > 0 {
 		command = args[0]
 		args = args[1:]
@@ -43,7 +43,7 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	case "help", "--help", "-h":
-		fmt.Println("relay [ui|desktop|session|project-context|daemon|ensure|bridge|version]\n\nui       Start the browser workspace (default)\ndesktop  Start or reuse a controller and print a fresh login as JSON\nsession  List, start, read, send input to, or stop a session\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
+		fmt.Println("Relay is a desktop application. Open the Relay app to manage your fleet.\n\nrelay [session|project-context|daemon|ensure|bridge|version]\n\nsession  List, start, read, send input to, or stop a session\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
 		return nil
 	case "ui":
 		return serveUI(args)
@@ -74,17 +74,10 @@ func serveUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	lock, err := lockControllerState(opts.StateDir)
-	if errors.Is(err, errControllerRunning) && !opts.NoLoginLink {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		launch, launchErr := launchExistingController(ctx, opts)
-		if launchErr != nil {
-			return fmt.Errorf("controller already started or is starting; run relay desktop to attach: %w", launchErr)
-		}
-		fmt.Printf("Relay is already running. Open this fresh private login link:\n\n  %s\n", launch.URL)
-		return nil
+	if !opts.NoLoginLink {
+		return errors.New("Relay is a desktop application; open the Relay app to manage your fleet")
 	}
+	lock, err := lockControllerState(opts.StateDir)
 	if err != nil {
 		return err
 	}
@@ -127,11 +120,7 @@ func serveUI(args []string) error {
 	serveErrors := make(chan error, 2)
 	go func() { serveErrors <- server.Serve(listener) }()
 	go func() { serveErrors <- control.Serve(controlListener) }()
-	if opts.NoLoginLink {
-		fmt.Printf("Relay %s controller ready at %s\n", version, info.Address)
-	} else {
-		fmt.Printf("Relay %s\nOpen this private login link in your browser:\n\n  %s\n\nClosing this client leaves remote sessions running.\n", version, app.LoginURL())
-	}
+	fmt.Printf("Relay %s controller ready at %s\n", version, info.Address)
 	select {
 	case <-ctx.Done():
 	case err = <-serveErrors:

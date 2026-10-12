@@ -1,8 +1,10 @@
 <#
-Real native Windows/WebView2 smoke test. Requires an installed Relay desktop,
+Real native Windows/WebView2 smoke test. Requires a packaged/extracted Relay desktop,
 a matching Microsoft-signed msedgedriver.exe, and a disposable Linux SSH fixture.
 The application and controller run as native Windows PE processes; the test
 does not invoke WSL. Fixture provisioning/teardown belongs to the caller.
+LaunchOnly uses no SSH fixture, mouse/keyboard input, or clipboard, and checks
+the extracted folder with its own state and WebView2 profile.
 
 Use only disposable fixture credentials. No provider login or inference occurs.
 Example:
@@ -16,14 +18,16 @@ param(
     [Parameter(Mandatory=$true)][string]$Desktop,
     [Parameter(Mandatory=$true)][string]$Bundle,
     [Parameter(Mandatory=$true)][string]$Driver,
-    [Parameter(Mandatory=$true)][string]$FixtureTarget,
-    [Parameter(Mandatory=$true)][ValidateRange(1,65535)][int]$FixturePort,
-    [Parameter(Mandatory=$true)][string]$FixtureFingerprint,
-    [Parameter(Mandatory=$true)][string]$FixturePasswordFile,
+    [string]$FixtureTarget,
+    [ValidateRange(1,65535)][int]$FixturePort = 22,
+    [string]$FixtureFingerprint,
+    [string]$FixturePasswordFile,
     [string]$FixtureDirectory = '/home/relay',
     [string]$Artifacts = '',
     [switch]$OverrideBundle,
     [switch]$FrameOnly,
+    # Isolated native launch/default resources only; no SSH, mouse, keys or clipboard.
+    [switch]$LaunchOnly,
     # Enable only with a disposable account clipboard. This replaces clipboard
     # contents with fixture text; private clipboard contents are never captured.
     [switch]$Clipboard
@@ -391,7 +395,7 @@ function App-Identity {
     return $identity
 }
 
-function Save-NativeWindow($Identity, [string]$Name = 'native-window.png') {
+function Save-NativeWindow($Identity, [string]$Name = 'native-window.png', [switch]$CheckContent) {
     $rectangle = New-Object RelayWindowProbe+Rect
     [uint32]$owner = 0
     [void][RelayWindowProbe]::GetWindowThreadProcessId($Identity.Window, [ref]$owner)
@@ -407,6 +411,21 @@ function Save-NativeWindow($Identity, [string]$Name = 'native-window.png') {
         finally { $graphics.ReleaseHdc($dc) }
         Assert-True $captured 'Native window capture failed'
         $bitmap.Save((Join-Path $script:Artifacts $Name), [Drawing.Imaging.ImageFormat]::Png)
+        if ($CheckContent) {
+            # Wait for visible content below the native chrome. This only
+            # captures the exact owned HWND, never the screen or clipboard.
+            $painted = 0
+            for ($y = 90; $y -lt $height - 20; $y += 8) {
+                for ($x = [int]($width / 4); $x -lt $width - 20; $x += 8) {
+                    $pixel = $bitmap.GetPixel($x, $y)
+                    if ($pixel.R -gt 100 -or $pixel.G -gt 100 -or $pixel.B -gt 100) {
+                        $painted++
+                        if ($painted -ge 40) { return $true }
+                    }
+                }
+            }
+            return $false
+        }
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
 }
 
@@ -512,6 +531,7 @@ function Test-CustomFrame {
     try {
         Assert-True ([RelayWindowProbe]::SetWindowPos($window,[IntPtr](-1),0,0,0,0,0x0013)) 'Could not raise the owned frame for physical input'
         [void](Wait-Until { Select-NativeView 'menu' } 'initialize menu diagnostics')
+        Assert-True (Execute-JS 'return JSON.stringify([...document.querySelectorAll("[data-action]")].map(button=>button.dataset.action)) === JSON.stringify(["reload","reconnect","close"]);') 'Desktop menu contains an unexpected browser action'
         Test-CustomFrameBody
     } finally {
         $script:FrameHoldsTopmost = $false
@@ -557,7 +577,7 @@ function Test-CustomFrameBody {
     # refocus an already-dismissed popup and conceal an opening focus race.
     Start-Sleep -Milliseconds 500
     Assert-True (Execute-JS 'return document.querySelector("[aria-label=\"Relay menu\"]").getAttribute("aria-expanded") === "true";') 'Relay menu dismissed itself immediately after opening'
-    [void](Wait-Until { (Select-NativeView 'menu') -and (Body-Contains 'Open in Browser') } 'custom Relay menu')
+    [void](Wait-Until { (Select-NativeView 'menu') -and (Body-Contains 'Reconnect') } 'custom Relay menu')
     # A transient child-view blur must not close a menu that still owns focus.
     Assert-True (Execute-JS 'document.querySelector("button").focus(); window.dispatchEvent(new Event("blur")); return document.hasFocus();') 'Menu did not receive keyboard focus'
     Start-Sleep -Milliseconds 500
@@ -583,7 +603,7 @@ function Test-CustomFrameBody {
     [void](Wait-Until { Select-NativeView 'menu' } 'menu reopened for reload')
     Save-NativeWindow $script:NativeIdentity 'native-custom-menu.png'
     Click-Selector '[data-action="reload"]'
-    [void](Wait-Until { (Select-NativeView 'content') -and (Body-Contains 'A home for your fleet.') } 'custom menu reload')
+    [void](Wait-Until { (Select-NativeView 'content') -and (Execute-JS 'return document.querySelector(".page-heading h1")?.textContent === "Fleet overview";') } 'custom menu reload')
     Save-FrameTrace
     Write-Host 'PASS: custom title bar, minimize/maximize/restore, native resize, menu reload and privileged-action isolation'
 }
@@ -610,7 +630,7 @@ function Start-AppSession {
     $script:SessionID = $result.sessionId
     Assert-True ($result.capabilities.browserName -eq 'webview2') 'Driver did not start native WebView2'
     [void](Session-WD POST '/timeouts' @{ implicit=0; pageLoad=30000; script=10000 })
-    [void](Wait-Until { (Select-NativeView 'content') -and (Body-Contains 'A home for your fleet.') } 'native Windows fleet rendering' 90)
+    [void](Wait-Until { (Select-NativeView 'content') -and (Execute-JS 'return document.querySelector(".page-heading h1")?.textContent === "Fleet overview";') } 'native Windows fleet rendering' 90)
     $script:NativeIdentity = Wait-Until { App-Identity } 'native PE process and Win32 window'
 }
 
@@ -619,6 +639,49 @@ function Close-AppSession {
         try { [void](Session-WD DELETE '') } catch { }
         $script:SessionID = $null
     }
+}
+
+function Test-NormalLaunch {
+    Close-AppSession
+    $normalEnvironment = $TestEnvironment.Clone()
+    $normalEnvironment.WEBVIEW2_USER_DATA_FOLDER = Join-Path $root 'normal-webview-profile'
+    $script:NormalProcess = Start-OwnedProcess $Desktop @() $normalEnvironment
+    $script:NativeIdentity = Wait-Until {
+        $NormalProcess.Process.Refresh()
+        if ($NormalProcess.Process.HasExited) { throw 'Normal native desktop launch exited unexpectedly' }
+        $window = [RelayWindowProbe]::MainFrame($NormalProcess.Process.Id)
+        if ($window -eq [IntPtr]::Zero) { return $null }
+        $identity = Process-Identity $NormalProcess.Process.Id $Desktop
+        $identity | Add-Member NoteProperty Window $window
+        return $identity
+    } 'normal native Windows window without WebDriver' 30
+    $normalLaunch = Fresh-Launch
+    Assert-True ($normalLaunch.pid -eq $ControllerIdentity.Id) 'Normal native launch replaced shared controller'
+    [void](Wait-Until {
+        $processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+        $descendants = @($NormalProcess.Process.Id)
+        for ($round=0; $round -lt 6; $round++) {
+            $children = @($processes | Where-Object { $_.ParentProcessId -in $descendants -and $_.ProcessId -notin $descendants })
+            if ($children.Count -eq 0) { break }
+            $descendants += @($children | ForEach-Object { [int]$_.ProcessId })
+        }
+        $owned = @($processes | Where-Object { $_.ProcessId -in $descendants })
+        Assert-True (-not ($owned | Where-Object { $_.Name -eq 'wsl.exe' })) 'Normal native launch invoked WSL'
+        $webviews = @($owned | Where-Object { $_.Name -eq 'msedgewebview2.exe' })
+        if ($webviews.Count -eq 0) { return $false }
+        Assert-True (-not ($webviews | Where-Object { $_.CommandLine -match '--(?:remote-debugging-port|enable-logging)(?:=|\s|$)' })) 'Normal native launch enabled automation or console logging'
+        Assert-True ([RelayWindowProbe]::VisibleConsoles([int[]]$descendants) -eq 0) 'Normal native launch opened a console window'
+        return $true
+    } 'normal native WebView2 without debug or logging switches' 30)
+    # Multi-WebView2 accessibility trees are not consistently exposed through
+    # the process's first HWND. Inspect the visible top-level Relay frame and
+    # retain a screenshot for visual review of normal (non-WebDriver) rendering.
+    $response = [IntPtr]::Zero
+    Assert-True ([RelayWindowProbe]::SendMessageTimeout($NativeIdentity.Window,0,[IntPtr]::Zero,[IntPtr]::Zero,2,1000,[ref]$response) -ne [IntPtr]::Zero) 'Normal native window is unresponsive'
+    [void](Wait-Until { Save-NativeWindow $NativeIdentity 'native-normal-window.png' -CheckContent } 'normal native content paint' 30)
+    [void]$NormalProcess.Process.CloseMainWindow()
+    Assert-True ($NormalProcess.Process.WaitForExit(10000)) 'Normal native window did not close'
+    Write-Host 'PASS: direct desktop launch uses native WebView2 without WSL, debugging switches or console window'
 }
 
 $Desktop = (Resolve-Path -LiteralPath $Desktop).Path
@@ -633,9 +696,14 @@ foreach ($binary in @($Desktop, $Controller)) {
 }
 $signature = Get-AuthenticodeSignature -LiteralPath $Driver
 Assert-True ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match 'Microsoft Corporation') 'WebDriver must have a valid Microsoft Authenticode signature'
-Assert-True ($FixtureFingerprint -match '^SHA256:[A-Za-z0-9+/]{40,}={0,2}$') 'Provide the known disposable fixture host fingerprint'
-$password = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $FixturePasswordFile).Path).TrimEnd("`r", "`n")
-Assert-True ($password.Length -gt 0 -and $password.Length -lt 1024) 'Invalid disposable fixture password'
+Assert-True (-not ($LaunchOnly -and $OverrideBundle)) 'LaunchOnly must use the extracted app default resources'
+$password = $null
+if (-not ($FrameOnly -or $LaunchOnly)) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($FixtureTarget)) 'Provide a disposable SSH fixture target'
+    Assert-True ($FixtureFingerprint -match '^SHA256:[A-Za-z0-9+/]{40,}={0,2}$') 'Provide the known disposable fixture host fingerprint'
+    $password = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $FixturePasswordFile).Path).TrimEnd("`r", "`n")
+    Assert-True ($password.Length -gt 0 -and $password.Length -lt 1024) 'Invalid disposable fixture password'
+}
 $root = Join-Path ([IO.Path]::GetTempPath()) ('relay-win-smoke-' + [Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $root)
 if (-not $Artifacts) { $Artifacts = Join-Path ([IO.Path]::GetTempPath()) ('relay-win-evidence-' + [Guid]::NewGuid().ToString('N')) }
@@ -663,7 +731,7 @@ try {
     $DriverProcess = Start-OwnedProcess $Driver @("--port=$port", '--allowed-ips=127.0.0.1') $TestEnvironment
     [void](Wait-Until { try { (HTTP $DriverHTTP GET "$DriverURL/status").Status -eq 200 } catch { $false } } 'Microsoft Edge WebDriver startup')
     Start-AppSession
-    Test-CustomFrame
+    if (-not $LaunchOnly) { Test-CustomFrame }
     $launch = Fresh-Launch
     $ControllerIdentity = Controller-Identity $launch.pid
     $Origin = $launch.address
@@ -674,6 +742,15 @@ try {
     Assert-True (@((API-JSON '/api/state').hosts).Count -eq 0) 'Test did not start with isolated Windows controller state'
     [void](Wait-Until { Body-Contains 'Connect your first machine' } 'empty isolated Windows fleet')
     Write-Host 'PASS: native PE + Win32 window + WebView2, native controller and independent browser login'
+    if ($LaunchOnly) {
+        [void](Wait-Until { Select-NativeView 'menu' } 'trusted portable menu')
+        Assert-True (Execute-JS 'return JSON.stringify([...document.querySelectorAll("[data-action]")].map(button=>button.dataset.action)) === JSON.stringify(["reload","reconnect","close"]);') 'Portable app retained a browser-workspace action'
+        [void](Wait-Until { Select-NativeView 'content' } 'portable fleet')
+        Save-NativeWindow $NativeIdentity 'native-portable-fleet.png'
+        Test-NormalLaunch
+        Write-Host ('PASS: extracted portable resources and isolated launch; elapsed {0:N2} seconds' -f $clock.Elapsed.TotalSeconds)
+        return
+    }
     if ($FrameOnly) {
         Save-NativeWindow $NativeIdentity 'native-custom-frame.png'
         Write-Host ('Frame-only elapsed: {0:N2} seconds' -f $clock.Elapsed.TotalSeconds)
@@ -787,46 +864,7 @@ try {
     $remoteSession=$null
     Write-Host 'PASS: native close/reopen preserves native controller, SSH transport, remote PTY and terminal output'
 
-    Close-AppSession
-    $normalEnvironment = $TestEnvironment.Clone()
-    $normalEnvironment.WEBVIEW2_USER_DATA_FOLDER = Join-Path $root 'normal-webview-profile'
-    $NormalProcess = Start-OwnedProcess $Desktop @() $normalEnvironment
-    $NativeIdentity = Wait-Until {
-        $NormalProcess.Process.Refresh()
-        if ($NormalProcess.Process.HasExited) { throw 'Normal native desktop launch exited unexpectedly' }
-        $window = [RelayWindowProbe]::MainFrame($NormalProcess.Process.Id)
-        if ($window -eq [IntPtr]::Zero) { return $null }
-        $identity = Process-Identity $NormalProcess.Process.Id $Desktop
-        $identity | Add-Member NoteProperty Window $window
-        return $identity
-    } 'normal native Windows window without WebDriver' 30
-    $normalLaunch = Fresh-Launch
-    Assert-True ($normalLaunch.pid -eq $ControllerIdentity.Id) 'Normal native launch replaced shared controller'
-    [void](Wait-Until {
-        $processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
-        $descendants = @($NormalProcess.Process.Id)
-        for ($round=0; $round -lt 6; $round++) {
-            $children = @($processes | Where-Object { $_.ParentProcessId -in $descendants -and $_.ProcessId -notin $descendants })
-            if ($children.Count -eq 0) { break }
-            $descendants += @($children | ForEach-Object { [int]$_.ProcessId })
-        }
-        $owned = @($processes | Where-Object { $_.ProcessId -in $descendants })
-        Assert-True (-not ($owned | Where-Object { $_.Name -eq 'wsl.exe' })) 'Normal native launch invoked WSL'
-        $webviews = @($owned | Where-Object { $_.Name -eq 'msedgewebview2.exe' })
-        if ($webviews.Count -eq 0) { return $false }
-        Assert-True (-not ($webviews | Where-Object { $_.CommandLine -match '--(?:remote-debugging-port|enable-logging)(?:=|\s|$)' })) 'Normal native launch enabled automation or console logging'
-        Assert-True ([RelayWindowProbe]::VisibleConsoles([int[]]$descendants) -eq 0) 'Normal native launch opened a console window'
-        return $true
-    } 'normal native WebView2 without debug or logging switches' 30)
-    # Multi-WebView2 accessibility trees are not consistently exposed through
-    # the process's first HWND. Inspect the visible top-level Relay frame and
-    # retain a screenshot for visual review of normal (non-WebDriver) rendering.
-    $response = [IntPtr]::Zero
-    Assert-True ([RelayWindowProbe]::SendMessageTimeout($NativeIdentity.Window,0,[IntPtr]::Zero,[IntPtr]::Zero,2,1000,[ref]$response) -ne [IntPtr]::Zero) 'Normal native window is unresponsive'
-    Save-NativeWindow $NativeIdentity 'native-normal-window.png'
-    [void]$NormalProcess.Process.CloseMainWindow()
-    Assert-True ($NormalProcess.Process.WaitForExit(10000)) 'Normal native window did not close'
-    Write-Host 'PASS: direct installed-app launch uses native WebView2 without WSL, debugging switches or console window'
+    Test-NormalLaunch
     Write-Host ('Elapsed: {0:N2} seconds; evidence: {1}' -f $clock.Elapsed.TotalSeconds, $Artifacts)
 } catch {
     if ($SessionID) { try { Save-FrameTrace } catch { }; try { Save-Screenshot 'failure.png' } catch { } }

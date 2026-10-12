@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowUpRight, Check, CircleAlert, Code2, Folder, KeyRound, Layers3, LoaderCircle, Network, Plus, Power, Radio, RefreshCw, Server, ShieldCheck, Terminal as TerminalIcon, Trash2 } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, CircleAlert, Folder, KeyRound, LoaderCircle, Network, Plus, Power, Radio, RefreshCw, Server, Terminal as TerminalIcon, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, errorMessage, runtimePath } from "./api";
 import { InlineError } from "./Forms";
@@ -6,31 +6,12 @@ import { HostStatus, SessionStatus } from "./Sidebar";
 import { Terminal } from "./LazyTerminal";
 import { RuntimeMaintenance } from "./RuntimeMaintenance";
 import { AgentTools } from "./AgentTools";
-import { pendingApprovals, SessionApprovalNotice } from "./Approvals";
+import { SessionApprovalNotice } from "./Approvals";
 import { SessionExitActions } from "./SessionExitActions";
 import { MaintenanceJobs, maintenanceActive } from "./MaintenanceJobs";
-import type { FleetState, Harness, HarnessAction, Host, MaintenanceJob, RuntimeState, Session } from "./types";
+import type { Harness, HarnessAction, Host, MaintenanceJob, RuntimeState, Session } from "./types";
 
-export function FleetOverview({ state, onAdd, onHost, onActivity }: { state: FleetState; onAdd: () => void; onHost: (host: Host) => void; onActivity: () => void }) {
-  const online = state.hosts.filter((host) => host.status === "online");
-  const running = online.reduce((sum, host) => sum + (state.runtimes[host.id]?.sessions.filter((session) => session.status === "running").length ?? 0), 0);
-  const ready = online.reduce((sum, host) => sum + (state.runtimes[host.id]?.harnesses.filter((harness) => harness.id !== "shell" && harness.installed && harness.authenticated === true).length ?? 0), 0);
-  return <div className="page-scroll"><div className="page-content fleet-page">
-    <div className="page-eyebrow"><span className="tiny-rule" /> YOUR WORK, IN VIEW</div>
-    <div className="page-heading"><div><h1>A home for your fleet.</h1><p>Every machine. Every session. Room to focus.</p></div><button className="button primary" onClick={onAdd}><Plus size={16} /> Connect machine</button></div>
-    <div className="metrics"><Metric icon={<Server size={18} />} label="Machines online" value={online.length} detail={`of ${state.hosts.length} machines`} /><Metric icon={<TerminalIcon size={18} />} label="Running sessions" value={running} detail="On available machines" /><Metric icon={<Code2 size={18} />} label="Agents authenticated" value={ready} detail="Ready to start work" /></div>
-    {pendingApprovals(state) > 0 && <button className="fleet-activity" onClick={onActivity}><ShieldCheck size={18} /><span>{pendingApprovals(state)} pending approval {pendingApprovals(state) === 1 ? "request" : "requests"} · Review in Activity</span><ArrowRight size={16} /></button>}
-    {state.loading ? <div className="empty-card loading-card"><LoaderCircle className="spin" size={24} /><h2>Finding your machines…</h2><p>Connecting to your local Relay controller.</p></div> : state.hosts.length === 0 ? <div className="empty-card fleet-empty"><div className="empty-illustration" aria-hidden="true"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><div className="empty-terminal"><div className="mini-window-dots"><i /><i /><i /></div><span className="mini-prompt">~ <b>›</b> <i /></span><span className="mini-line" /><span className="mini-line short" /></div><div className="floating-server"><Server size={21} /><span /></div></div><span className="eyebrow">START WITH ONE MACHINE</span><h2>Your next workspace is one connection away.</h2><p>Connect a Linux machine over SSH. Relay sets up a persistent runtime, so you can leave a terminal and come back to your work.</p><button className="button primary" onClick={onAdd}>Connect your first machine <ArrowRight size={16} /></button><div className="empty-benefits"><span><Check size={14} /> SSH keys or password</span><span><Check size={14} /> No root required</span><span><Check size={14} /> Your infrastructure</span></div></div> : <section className="machines-section"><div className="section-heading"><h2>Your machines <span>{state.hosts.length}</span></h2><span>Live connection status</span></div><div className="machine-grid">{state.hosts.map((host) => {
-      const sessions = state.runtimes[host.id]?.sessions ?? [];
-      return <button className="machine-card" key={host.id} onClick={() => onHost(host)}><div className="machine-card-top"><span className="machine-icon"><Server size={21} /></span><HostStatus host={host} compact /></div><h3>{host.name}</h3><p className="mono machine-target">{host.target}</p><div className="machine-card-bottom"><span><TerminalIcon size={13} />{sessions.length} {sessions.length === 1 ? "session" : "sessions"}</span><ArrowUpRight size={17} /></div>{(host.status === "connecting" || host.status === "installing") && <p className="machine-card-stage"><LoaderCircle className="spin" size={12} />{host.stage || "Reconnecting…"}</p>}{host.runtimeOperation?.status === "running" && <p className="machine-card-stage"><RefreshCw className="spin" size={12} />{host.runtimeOperation.stage || "Working on the runtime…"}</p>}{host.error && <p className="machine-card-error">{host.error}</p>}</button>;
-    })}<button className="machine-card add-card" onClick={onAdd}><span className="add-card-icon"><Plus size={21} /></span><strong>Connect another machine</strong><span>Bring your next workspace into view</span></button></div></section>}
-    <div className="principles-strip"><div><Network size={17} /><span>Connected by SSH</span></div><span className="strip-separator" /><div><ShieldCheck size={17} /><span>Runs on your machines</span></div><span className="strip-separator" /><div><Layers3 size={17} /><span>Sessions stay when you leave</span></div></div>
-  </div></div>;
-}
-
-function Metric({ icon, label, value, detail }: { icon: React.ReactNode; label: string; value: number; detail: string }) {
-  return <div className="metric"><div className="metric-label">{icon}<span>{label}</span></div><div className="metric-value">{String(value).padStart(2, "0")}<span>{detail}</span></div></div>;
-}
+export { FleetOverview } from "./Fleet";
 
 export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDisconnect, onForget, onSetup, onCreated, onRefresh, maintenanceJobs, maintenanceSessions, onMaintenance }: { host: Host; runtime?: RuntimeState; onNew: () => void; onSession: (session: Session) => void; onConnect: () => void; onDisconnect: () => void; onForget: () => void; onSetup: () => void; onCreated: (session: Session) => void; onRefresh: () => void; maintenanceJobs: MaintenanceJob[]; maintenanceSessions: Session[]; onMaintenance: (job: MaintenanceJob) => void }) {
   const active = host.status === "online";

@@ -4,7 +4,7 @@ use url::Url;
 
 pub const HEIGHT: f64 = 40.0;
 pub const MENU_WIDTH: f64 = 284.0;
-pub const MENU_HEIGHT: f64 = 232.0;
+pub const MENU_HEIGHT: f64 = 197.0;
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -21,7 +21,6 @@ pub enum Action {
     EscapeMenu,
     Reload,
     Reconnect,
-    Browser,
 }
 
 pub fn trusted_page(label: &str, url: &Url) -> bool {
@@ -201,7 +200,7 @@ pub async fn frame_action(
             }
             Ok(())
         }
-        Action::Reload | Action::Reconnect | Action::Browser => {
+        Action::Reload | Action::Reconnect => {
             dismiss_menu(app, true);
             crate::app_action(app, action);
             Ok(())
@@ -247,7 +246,13 @@ mod tests {
 
     #[test]
     fn frame_protocol_has_no_arbitrary_url_or_execution_action() {
-        for action in ["open-url", "execute", "navigate", "open-devtools"] {
+        for action in [
+            "browser",
+            "open-url",
+            "execute",
+            "navigate",
+            "open-devtools",
+        ] {
             assert!(serde_json::from_str::<Action>(&format!("\"{action}\"")).is_err());
         }
     }

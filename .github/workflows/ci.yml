@@ -107,7 +107,7 @@ jobs:
         run: |
           cargo fmt --check
           cargo test --release --locked
-      - name: Native WebKit lifecycle and browser coexistence
+      - name: Native WebKit lifecycle and independent viewer isolation
         run: |
           sudo apt-get install -y "$PWD/dist/relay-desktop-linux-amd64.deb"
           mkdir -p .test-artifacts/native-linux
@@ -187,6 +187,12 @@ jobs:
           ./scripts/build-desktop-windows.ps1 -SourceRoot $PWD.Path -StageRoot (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') -NoticesPath (Join-Path $PWD.Path 'desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt') 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-build.log')
       - name: Install and verify Windows package resources
         run: ./scripts/test_windows_install.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-installed.log')
+      - name: Package and verify portable Windows desktop
+        run: |
+          python scripts/test_portable_package.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Portable packaging regressions failed.' }
+          python scripts/package_desktop_windows.py --stage (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') --output dist/relay-desktop-windows-amd64-portable.zip --replace
+          if ($LASTEXITCODE -ne 0) { throw 'Portable Windows packaging failed.' }
       - name: Retain native Windows evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -201,5 +207,7 @@ jobs:
           path: |
             dist/relay-desktop-windows-amd64-setup.exe
             dist/relay-desktop-windows-amd64-setup.exe.sha256
+            dist/relay-desktop-windows-amd64-portable.zip
+            dist/relay-desktop-windows-amd64-portable.zip.sha256
           if-no-files-found: error
           retention-days: 14

@@ -4,12 +4,14 @@ param(
     [string]$StageRoot = (Join-Path $env:LOCALAPPDATA 'RelayBuild\public-desktop'),
     [string]$NoticesPath,
     [switch]$CompileOnly,
+    [switch]$Portable,
     [switch]$StageOnly
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
+if ($CompileOnly -and $Portable) { throw 'Choose CompileOnly or Portable, not both.' }
 if (-not $SourceRoot) { $SourceRoot = Split-Path -Parent $PSScriptRoot }
 
 # Build on a native Windows drive. Reading the checkout through a UNC share is
@@ -166,9 +168,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Native Windows unit tests failed.' }
     & cargo.exe clippy --locked --all-targets -- -D warnings
     if ($LASTEXITCODE -ne 0) { throw 'Native Windows Clippy checks failed.' }
-    if ($CompileOnly) {
+    if ($CompileOnly -or $Portable) {
         & cargo.exe build --release --locked
         if ($LASTEXITCODE -ne 0) { throw 'Native Windows release compilation failed.' }
+        if ($Portable) {
+            & python.exe (Join-Path $SourceRoot 'scripts\package_desktop_windows.py') --stage $StageRoot --output (Join-Path $BundleSource 'relay-desktop-windows-amd64-portable.zip') --replace
+            if ($LASTEXITCODE -ne 0) { throw 'Packaging the portable Windows app failed.' }
+            Write-Output 'Built the portable Windows archive. No application was installed or launched.'
+            return
+        }
         Write-Output "Compiled native Windows app at $StageRoot\target\release\relay-desktop.exe. No installer was built or installed."
         return
     }

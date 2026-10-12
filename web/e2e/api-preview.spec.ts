@@ -9,7 +9,7 @@ test("the UI-only preview returns an actionable API error instead of its HTML ap
   expect(await response.json()).toEqual({ error: expect.stringContaining("UI preview server") });
   await page.goto("/");
   await expect(page.getByRole("alert")).toContainText("UI preview server");
-  await expect(page.getByRole("alert")).toContainText("relay ui");
+  await expect(page.getByRole("alert")).toContainText("Relay desktop app");
   await expect(page.getByRole("alert")).not.toContainText("Unexpected token");
   await expect(page.getByRole("alert")).not.toContainText("<!doctype");
 });

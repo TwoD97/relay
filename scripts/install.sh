@@ -58,4 +58,4 @@ if [ -d "$RELAY_INSTALL_BIN/relay" ] && [ ! -L "$RELAY_INSTALL_BIN/relay" ]; the
 fi
 ln -s "$RELAY_RELEASE/relay-linux-$RELAY_ARCH" "$RELAY_LINK_DIR/relay"
 mv -fT "$RELAY_LINK_DIR/relay" "$RELAY_INSTALL_BIN/relay"
-printf 'Installed Relay %s. Start with:\n  %s/relay ui\n' "$RELAY_VERSION" "$RELAY_INSTALL_BIN"
+printf 'Installed Relay %s runtime and agent CLI. Open the Relay desktop app to manage your machines.\nCLI help: %s/relay help\n' "$RELAY_VERSION" "$RELAY_INSTALL_BIN"

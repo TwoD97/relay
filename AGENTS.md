@@ -1,7 +1,8 @@
 # Working on Relay
 
-Relay is a personal control plane for Linux terminal sessions, with browser and
-native desktop clients. Keep shared session facts in the runtime/controller API;
+Relay is a personal control plane for Linux terminal sessions, with native
+desktop clients. The embedded interface uses web technologies; a standalone
+browser client is not part of the product. Keep shared session facts in the runtime/controller API;
 keep navigation, layout, and temporary view state in the client.
 
 - `cmd/relay`: command entry points and platform-specific controller lifecycle.

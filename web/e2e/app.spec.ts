@@ -4,7 +4,7 @@ import { local, mockFleet, openNavigation, remote, work } from "./fixture";
 test("empty fleet is usable and stays within a phone viewport", async ({ page }, testInfo) => {
   await mockFleet(page, { hosts: [], sessions: {} });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect your first machine" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: testInfo.outputPath("fleet-empty.png"), fullPage: true });
@@ -272,7 +272,7 @@ test("forget and session termination require concrete confirmation; local is pro
   await page.getByRole("button", { name: "Forget machine", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("sessions will keep running");
   await page.getByRole("dialog").getByRole("button", { name: "Forget machine", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
 });
 
 test("a stuck harness probe and failed host do not stall healthy sessions or fleet polls", async ({ page }) => {
@@ -306,11 +306,12 @@ test("harness install opens the returned real installer session", async ({ page 
   expect(fixture.mutations).toContainEqual(expect.objectContaining({ method: "POST", path: "/api/hosts/local/runtime/harnesses/claude/install", csrf: "fixture-csrf" }));
 });
 
-test("authentication failure explains the one-time local login without a fake password form", async ({ page }) => {
+test("connection loss points to desktop reconnect without asking for account sign-in", async ({ page }) => {
   await mockFleet(page, { unauthorized: true });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Connect this browser to Relay." })).toBeVisible();
-  await expect(page.getByText("relay ui", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reconnect Relay." })).toBeVisible();
+  await expect(page.getByText("No Relay account or sign-in is needed.", { exact: false })).toBeVisible();
+  await expect(page.getByText("relay ui", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Password")).toHaveCount(0);
 });
 
@@ -335,7 +336,7 @@ test("an existing tab refreshes CSRF after controller reauthentication", async (
   await page.goto("/#host/local");
   await expect(page.getByRole("heading", { name: "This computer", exact: true })).toBeVisible();
   fixture.setAuthentication(false, "csrf-after-restart");
-  await expect(page.getByRole("heading", { name: "Connect this browser to Relay." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reconnect Relay." })).toBeVisible();
   fixture.setAuthentication(true);
   await page.getByRole("button", { name: "Check connection", exact: true }).click();
   await expect(page.getByRole("heading", { name: "This computer", exact: true })).toBeVisible();

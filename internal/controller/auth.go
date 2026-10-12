@@ -21,7 +21,7 @@ func (s *Server) addLoginTokenLocked(token string, now time.Time) {
 	s.launchTokens[sha256.Sum256([]byte(token))] = now.Add(launchTokenTTL)
 }
 
-// IssueLoginURL grants one additional browser its own short-lived launch link.
+// IssueLoginURL grants one additional desktop view its own short-lived launch link.
 // Session cookies and CSRF stay stable, so existing clients remain connected.
 // This is exposed only by the private local control socket, never the web API.
 func (s *Server) IssueLoginURL() (string, error) {
@@ -103,7 +103,7 @@ func (s *Server) secure(next http.Handler) http.Handler {
 			}
 			valid := s.consumeLoginToken(r.URL.Query().Get("token"))
 			if !valid {
-				http.Error(w, "This login link is invalid, expired, or has already been used. Run relay ui or reconnect the desktop window to get a fresh link.", 401)
+				http.Error(w, "This connection has expired or has already been used. Choose Reconnect in the Relay desktop menu.", 401)
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.sessionToken, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -122,9 +122,9 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		cookie, err := r.Cookie(cookieName)
 		if err != nil || !equalSecret(cookie.Value, s.sessionToken) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
-				writeError(w, 401, "Open the login link printed by relay ui")
+				writeError(w, 401, "Choose Reconnect in the Relay desktop menu")
 			} else {
-				http.Error(w, "Open the login link printed by relay ui in your terminal.", 401)
+				http.Error(w, "Choose Reconnect in the Relay desktop menu.", 401)
 			}
 			return
 		}

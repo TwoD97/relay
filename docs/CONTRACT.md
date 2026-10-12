@@ -1,7 +1,7 @@
 # Relay implementation contract
 
 Linux, WSL and native Windows clients; Linux amd64/arm64 remote hosts. A Go controller serves the
-local browser UI; a Linux Go runtime owns remote PTYs. Linux uses OpenSSH and
+embedded desktop UI; a Linux Go runtime owns remote PTYs. Linux uses OpenSSH and
 Windows uses native Go SSH for authentication and host trust. New
 API namespace and data directories belong to Relay.
 
@@ -63,7 +63,7 @@ Optional approval and observer routes are specified in [ACTIVITY.md](ACTIVITY.md
 Older runtimes may return 404 for these capabilities without becoming incompatible.
 Status is evidence-based `running|exited|interrupted`; do not fabricate agent approval
 state from incidental screen text. Session metadata persists atomically; after daemon
-restart previously running sessions become interrupted. Browser/SSH disconnect does
+restart previously running sessions become interrupted. Desktop/SSH disconnect does
 not stop processes. A host reboot cannot preserve original processes.
 
 Optional `processIdentity:{pid,startTime,bootId}` records the Linux session
@@ -109,8 +109,8 @@ until a validated build and an explicit target are available.
 
 `relay desktop` ensures one controller per private client state directory and
 prints a single JSON launch record: `{url,address,version,protocol:1,pid}`.
-The desktop and browser connect to the same HTTP origin; each obtains a fresh,
-expiring, one-use login link without rotating existing cookies or CSRF tokens.
+Each desktop window connects its embedded interface to the same local HTTP
+origin using a fresh, expiring, one-use launch link without rotating existing cookies or CSRF tokens.
 Controller discovery and token minting use a private Unix control socket on Linux
 or a current-user-only, peer-verified named pipe on Windows.
 A lifetime file lock prevents independent controllers from overwriting one host
@@ -139,7 +139,7 @@ protocol number; optional fields must remain optional for older servers.
 
 ## Reconnect, maintenance and agent coordination
 
-Controller creation, successful private desktop launch, and authenticated browser
+Controller creation, successful private desktop launch, and authenticated embedded interface
 startup each request idempotent saved-host reconnect. Four concurrent connection
 attempts are allowed; a pending or online connection is never replaced. This is
 one launch attempt, not a password-retry loop. Closing views or the controller

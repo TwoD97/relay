@@ -25,7 +25,7 @@ test("a lost startup reconnect reply leaves the fleet usable and retries only on
     return route.fallback();
   });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "A home for your fleet." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview" })).toBeVisible();
   await expect(page.getByRole("alert")).toContainText("The action may have completed");
   await expect.poll(() => fixture.stateRequests()).toBeGreaterThan(1);
   expect(attempts).toBe(1);
@@ -190,11 +190,11 @@ test("background completion never changes a newer navigation choice", async ({ p
   const job = fixture.maintenanceJobs[0];
   fixture.startMaintenanceJob(job.id);
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "A home for your fleet.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
   fixture.finishMaintenanceJob(job.id, "succeeded");
   const polls = fixture.stateRequests();
   await expect.poll(() => fixture.stateRequests()).toBeGreaterThan(polls + 1);
-  await expect(page.getByRole("heading", { name: "A home for your fleet.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
   expect(fixture.sessions.dev).toEqual([work]);
   expect(fixture.attachments).toEqual([]);
 });
@@ -291,8 +291,9 @@ for (const [status, contentType] of [[200, "application/json"], [503, "text/html
     });
     await page.goto("/#host/dev");
     await page.getByRole("article", { name: "Codex", exact: true }).getByRole("button", { name: "Update agent", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Relay's API returned a web page");
-    await expect(page.getByRole("alert")).toContainText("relay ui");
+    await expect(page.getByRole("alert")).toContainText("Relay received an unexpected page from its local service");
+    await expect(page.getByRole("alert")).toContainText("Choose Reconnect in the Relay menu");
+    await expect(page.getByRole("alert")).toContainText("The action may have completed");
     await expect(page.getByRole("alert")).not.toContainText("PRIVATE-HTML-MARKER");
     await expect(page.getByRole("alert")).not.toContainText("Unexpected token");
     await expect(page).toHaveURL(/#host\/dev$/);
@@ -351,7 +352,7 @@ test("a delayed background launch reply does not replace a newer navigation choi
   await expect.poll(() => fixture.maintenanceJobs.length).toBe(1);
   const polls = fixture.stateRequests();
   await expect.poll(() => fixture.stateRequests()).toBeGreaterThan(polls);
-  await expect(page.getByRole("heading", { name: "A home for your fleet.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
   expect(fixture.mutations.filter((entry) => entry.path.endsWith("/update"))).toHaveLength(1);
   expect(fixture.attachments).toEqual([]);
 });

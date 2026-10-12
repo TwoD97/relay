@@ -35,6 +35,8 @@ fn main() {
         .init();
     if let Err(error) = run() {
         tracing::error!(%error, "Relay desktop could not start");
+        #[cfg(target_os = "windows")]
+        platform::show_startup_failure();
         std::process::exit(1);
     }
 }
@@ -148,20 +150,13 @@ fn run() -> tauri::Result<()> {
                 true,
                 Some("CmdOrCtrl+Shift+R"),
             )?;
-            let browser = MenuItem::with_id(
-                app,
-                "browser",
-                "Open in Browser",
-                true,
-                Some("CmdOrCtrl+Shift+B"),
-            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Relay", true, Some("CmdOrCtrl+Q"))?;
             let separator = PredefinedMenuItem::separator(app)?;
             let relay = Submenu::with_items(
                 app,
                 "Relay",
                 true,
-                &[&reload, &reconnect, &browser, &separator, &quit],
+                &[&reload, &reconnect, &separator, &quit],
             )?;
             window.set_menu(Menu::with_items(app, &[&relay])?)?;
             // Keep native accelerators while drawing all visible chrome ourselves.
@@ -178,7 +173,7 @@ fn run() -> tauri::Result<()> {
                     if let Ok(mut slot) = state.launcher.lock() {
                         *slot = Some(launcher);
                     }
-                    connect(app.handle().clone(), false);
+                    connect(app.handle().clone());
                 }
                 Err(error) => {
                     tracing::error!(%error, "Relay resources are unavailable");
@@ -191,7 +186,6 @@ fn run() -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "reload" => app_action(app, frame::Action::Reload),
             "reconnect" => app_action(app, frame::Action::Reconnect),
-            "browser" => app_action(app, frame::Action::Browser),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -210,13 +204,12 @@ fn app_action(app: &AppHandle, action: frame::Action) {
                 }
             }
         }
-        frame::Action::Reconnect => connect(app.clone(), false),
-        frame::Action::Browser => connect(app.clone(), true),
+        frame::Action::Reconnect => connect(app.clone()),
         _ => {}
     }
 }
 
-fn connect(app: AppHandle, browser: bool) {
+fn connect(app: AppHandle) {
     let state = app.state::<DesktopState>().inner().clone();
     if state.launching.swap(true, Ordering::AcqRel) {
         return;
@@ -230,19 +223,11 @@ fn connect(app: AppHandle, browser: bool) {
         let result = launcher
             .ok_or_else(|| {
                 launch::LaunchError::new(
-                    "The Relay controller resource is unavailable. Reinstall the desktop app.",
+                    "The Relay controller resource is unavailable. Restore the complete Relay package and reopen the app.",
                 )
             })
             .and_then(|launcher| launcher.launch());
         match result {
-            Ok(launch) if browser => {
-                // Only a freshly validated HTTP loopback sign-in URL can reach
-                // the native opener, and only through this explicit menu action.
-                if open::that_detached(launch.url.as_str()).is_err() {
-                    tracing::error!("Could not open the system browser. Check that a default browser is configured.");
-                    show_connection_error(&app, "Could not open your browser. Set a default browser in system settings, then choose Relay → Reconnect to return to your fleet.");
-                }
-            }
             Ok(launch) => {
                 if let Ok(mut message) = state.error_message.lock() {
                     *message = None;
