@@ -187,6 +187,13 @@ Read-only observation never acquires the writer lease; input respects it.
 
 The skill is embedded from `skills/relay/SKILL.md` and installed in Relay's own
 remote data directory. Personal Codex and Claude skill locations link to that
-copy; conflicting user-created entries are left intact. Discovery locations
+copy; conflicting user-created entries are left intact. Registrations
+from earlier installations are upgraded only when the existing entry is a
+symlink to a data-directory skill containing just an unmodified known bundled
+`SKILL.md`. Relay preserves the old directory and saves the original link under
+its managed `skills/.registration.*` directory before replacing that link.
+Changed skills, extra files, real directories, and unknown targets remain
+conflicts for the user to resolve; reconnecting does not overwrite them.
+Registration never restarts a runtime or migrates its sessions. Discovery locations
 follow the [Codex skill documentation](https://learn.chatgpt.com/docs/build-skills)
 and [Claude Code skill documentation](https://code.claude.com/docs/en/skills).
