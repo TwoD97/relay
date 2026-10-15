@@ -13,7 +13,7 @@ excluded from the repository.
 ./scripts/build-windows-controller.sh
 go test -race -tags relay_ssh_native ./internal/transport -count=1 -timeout 1m
 RELAY_SSH_INTEGRATION=1 RELAY_SSH_HARNESSES=1 go test -race ./internal/transport -run TestRealSSH -count=1 -v -timeout 10m
-CI=1 RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts
+CI=1 RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts
 ```
 
 The SSH gate uses Docker containers and can download the current official
@@ -47,6 +47,43 @@ paths and isolated state/profile, then checks ordinary native startup without
 WSL, console windows, or debug flags. It does not replace the full interactive
 terminal, window focus, or optional Windows clipboard gate.
 
+## Appearance coverage
+
+Appearance cases exercise live system changes, persistent manual choices,
+unavailable storage, native save rejection, delayed replies after newer native
+events, and the reconnect screen. Terminal tests retain the same renderer,
+writer lease, selection, output, and input while changing both ANSI palettes;
+explicit RGB output remains unchanged.
+
+Native Linux and Windows checks use the actual appearance command from the
+embedded app and verify matching content, title-bar, and menu themes. They check
+saved preferences across app close/reopen while the controller stays alive,
+reject invalid values, and retain the restriction against invoking native frame
+actions from controller content. Test state is isolated; no operating-system
+theme preference is changed.
+
+## Mastermind coverage
+
+Controller regressions cover a single durable startup, configuration revisions,
+parallel saves, delayed responses after reconfiguration, lost creation replies,
+exact host/session ownership, disabled recovery, explicit restart after exit,
+unsupported runtimes, missing sign-in, persistence failure, and corrupt optional
+state without losing the rest of the fleet. Remote HTTP fixtures exercise
+platform-independent recovery; Linux-only creation fixtures use real temporary
+directories rather than pretending Windows has a local Linux runtime.
+
+Runtime cases verify literal coordinator instructions and Manual/Auto arguments
+for both harnesses, durable launch identities, unsupported CLI rejection, and
+concurrent duplicate-token rejection. Opt-in installed-CLI checks use `--help`
+only. Interface fixtures cover setup, stale edits, unknown outcomes, disabled or
+unverified terminal attachment, and both appearance palettes.
+
+`web/e2e/mastermind-live.spec.ts` uses disposable controllers, runtime directories,
+and deterministic provider executables. It checks a real coordinator PTY,
+reload/second-viewer behavior, controller restart, and a provider switch that
+preserves the previous process. No provider login or inference occurs, so these
+checks validate orchestration mechanics rather than model planning quality.
+
 ## Activity and clipboard coverage
 
 The approval gate covers competing decisions, exact session identity, request
@@ -71,6 +108,57 @@ round trips, and rejection of delayed paste after focus/control changes. The
 Linux native gate uses a private Xvfb clipboard. Windows native clipboard checks
 require the optional `-Clipboard` gate documented in the desktop README; ordinary
 Windows installer checks do not exercise the user's clipboard.
+
+## Appearance and Mastermind — 2026-10-15
+
+Runtime bundle: `0.1.0-dev.1be423ff9815`.
+
+Completed local checks:
+
+- The final combined interface suite passed all 272 cases in 7.5 minutes:
+  262 fixture cases and ten real-binary cases across desktop and narrow-window
+  viewports, with no failures or skips. Appearance changes preserve terminal
+  output, selection, focus and writer ownership without reconnecting.
+- Full Go race tests passed 224 top-level cases across six packages; `go vet`
+  and Go formatting checks passed. Seven opt-in cases were skipped in this
+  default run; installed harness arguments and real SSH were checked separately.
+- Mastermind controller cases cover persistent ownership and configuration,
+  concurrent saves, delayed or lost replies, explicit restart after exit,
+  old-runtime capability checks, and read-only recovery without duplicate
+  agents. Native Windows passed five Mastermind and six authentication/security
+  cases; ten Linux-only creation cases were intentionally skipped there.
+- Both real-binary Mastermind interface cases passed. They used Claude and Codex
+  fixture executables, actual PTY input, scoped `RELAY_BIN`/`RELAY_SOCKET` fleet
+  discovery, reload and a second viewer, controller restart, and configuration
+  switching while retaining the previous running session. No provider account
+  or model inference was used.
+- Installed Claude Code and Codex accepted the Mastermind and Manual/Auto
+  arguments in help-only checks. This verifies CLI compatibility, not the
+  coordinator's model planning quality or subscription access.
+- Native SSH transport passed 15 race-test cases. Both disposable SSH gates
+  passed, including two-host terminal control, trust boundaries, exclusive
+  writers, controller crash/restart recovery, background maintenance, and
+  preservation of remote process identities and shell state. Clean managed
+  installs verified Codex 0.162.1 and Claude Code 2.1.300 without sign-in.
+- Native Rust formatting, strict Clippy, and tests passed on Linux (15) and
+  Windows (14). Linux WebKit passed appearance synchronization, connection
+  recovery, terminal keys, isolated clipboard, writer ownership, and app
+  close/reopen without replacing the runtime or session.
+- The final extracted Windows portable payload passed the isolated
+  `-LaunchOnly` gate in 11.72 seconds: System/Light/Dark across the embedded
+  application, title bar and menu; saved appearance after reopening; rejected
+  invalid or privileged IPC; and ordinary native startup without WSL, console
+  windows or debugging flags. Physical Windows keyboard/clipboard interaction
+  was not repeated in this gate.
+- Installer tests passed all ten cases. Portable packaging passed eight cases
+  on Linux with its Windows-only junction case skipped. The actual Windows ZIP
+  was extracted, checked against its complete 22-file allowlist and manifest,
+  and launched using its default packaged resources.
+
+Existing remote runtimes are never restarted by these checks or the desktop
+update. An older running runtime without `mastermindV1` must be upgraded after
+its active sessions finish before Mastermind setup can succeed. Previous
+sessions remain available in the meantime.
 
 ## Fleet names and launch modes — 2026-10-12
 

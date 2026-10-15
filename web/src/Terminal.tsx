@@ -3,6 +3,8 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ArrowDown, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Eye, Keyboard, RotateCw } from "lucide-react";
 import { websocketURL } from "./api";
+import { useAppearance } from "./appearance";
+import { terminalTheme } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 
 type LinkState = "connecting" | "connected" | "disconnected";
@@ -10,6 +12,9 @@ type LinkState = "connecting" | "connected" | "disconnected";
 export default function Terminal({ path, enabled = true, autoReconnect = true, exclusive = true, finished = false, label = "Terminal" }: {
   path: string; enabled?: boolean; autoReconnect?: boolean; exclusive?: boolean; finished?: boolean; label?: string;
 }) {
+  const { resolved: appearance } = useAppearance();
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
   const container = useRef<HTMLDivElement>(null);
   const controlButton = useRef<HTMLButtonElement>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -44,7 +49,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     const term = new XTerminal({
       cursorBlink: false, disableStdin: true, cursorStyle: "bar", fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: window.innerWidth < 600 ? 12 : 13, lineHeight: 1.35, scrollback: 8000,
-      theme: { background: "#0d1110", foreground: "#d7e0d9", cursor: "#c0ee78", selectionBackground: "#47563a", black: "#1c2420", brightBlack: "#738078", red: "#f48989", green: "#b5de86", yellow: "#e8cb88", blue: "#94bcdd", magenta: "#c8a9d7", cyan: "#82cac1", white: "#d7e0d9" },
+      theme: terminalTheme(appearanceRef.current),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -259,6 +264,12 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       pasteClipboard.current = () => {};
     };
   }, [path, autoReconnect, exclusive]);
+
+  useEffect(() => {
+    // Appearance changes repaint the existing renderer. Recreating the attach
+    // would discard selection/history and release the user's writer lease.
+    if (terminal.current) terminal.current.options.theme = terminalTheme(appearance);
+  }, [appearance]);
 
   useEffect(() => {
     terminal.current?.textarea?.setAttribute("aria-label", `${label} input`);

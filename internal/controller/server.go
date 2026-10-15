@@ -53,6 +53,9 @@ type Server struct {
 	maintenance                     *maintenanceStore
 	maintenanceWG                   sync.WaitGroup
 	fleet                           *fleetPublisher
+	mastermind                      *mastermindStore
+	mastermindWake                  chan struct{}
+	mastermindWG                    sync.WaitGroup
 }
 
 func New(cfg Config) (*Server, error) {
@@ -72,9 +75,16 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	mastermind, err := openMastermindStore(cfg.StateDir)
+	if err != nil {
+		// Mastermind is optional. Preserve corrupt or unreadable state and keep
+		// the rest of the fleet available without dispatching another agent.
+		mastermind = unavailableMastermindStore(cfg.StateDir)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
 	s.maintenance = maintenance
+	s.mastermind, s.mastermindWake = mastermind, make(chan struct{}, 1)
 	s.fleet, err = newFleetPublisher(s)
 	if err != nil {
 		cancel()
@@ -98,6 +108,10 @@ func New(cfg Config) (*Server, error) {
 		writeJSON(w, 200, map[string]any{"csrf": s.csrf, "version": cfg.Version})
 	})
 	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("GET /api/mastermind", s.getMastermind)
+	mux.HandleFunc("POST /api/mastermind/config", s.configureMastermind)
+	mux.HandleFunc("POST /api/mastermind/start", s.startMastermind)
+	mux.HandleFunc("POST /api/mastermind/disable", s.disableMastermind)
 	mux.HandleFunc("POST /api/reconnect", s.reconnectHosts)
 	mux.HandleFunc("POST /api/hosts", s.addHost)
 	mux.HandleFunc("POST /api/hosts/{id}/connect", s.connectHost)
@@ -132,6 +146,8 @@ func New(cfg Config) (*Server, error) {
 	s.ReconnectSaved()
 	s.maintenanceWG.Add(1)
 	go s.monitorMaintenance()
+	s.mastermindWG.Add(1)
+	go s.monitorMastermind()
 	return s, nil
 }
 
@@ -158,6 +174,7 @@ func (s *Server) Close() error {
 	}
 	s.connectWG.Wait()
 	s.maintenanceWG.Wait()
+	s.mastermindWG.Wait()
 	if s.fleet != nil {
 		<-s.fleet.done
 	}
@@ -169,7 +186,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	if s.config.LocalSocket != "" {
 		hosts = append([]Host{{ID: "local", Name: "This computer", Target: "local", Status: "online", Stage: "Local runtime"}}, hosts...)
 	}
-	writeJSON(w, 200, map[string]any{"version": s.config.Version, "hosts": hosts, "maintenanceJobs": s.maintenance.list()})
+	writeJSON(w, 200, map[string]any{"version": s.config.Version, "hosts": hosts, "maintenanceJobs": s.maintenance.list(), "mastermind": s.mastermind.current().MastermindState})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

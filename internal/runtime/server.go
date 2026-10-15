@@ -42,6 +42,7 @@ type Session struct {
 	Cwd             string           `json:"cwd"`
 	Harness         string           `json:"harness"`
 	AgentMode       string           `json:"agentMode,omitempty"`
+	MastermindID    string           `json:"mastermindId,omitempty"`
 	Status          string           `json:"status"`
 	CreatedAt       time.Time        `json:"createdAt"`
 	UpdatedAt       time.Time        `json:"updatedAt"`
@@ -180,6 +181,9 @@ func (s *Server) load() error {
 		}
 		if meta.AgentMode != "" && (meta.Harness == "shell" || meta.AgentMode != "manual" && meta.AgentMode != "auto") {
 			return errors.New("invalid saved agent mode")
+		}
+		if meta.MastermindID != "" && (!validMastermindID(meta.MastermindID) || meta.Harness == "shell") {
+			return errors.New("invalid saved Mastermind identity")
 		}
 		if meta.Status != "running" && meta.Status != "exited" && meta.Status != "interrupted" {
 			return errors.New("invalid saved session status")

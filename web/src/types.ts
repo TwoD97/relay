@@ -58,6 +58,7 @@ export interface Session {
   cwd: string;
   harness: HarnessId;
   agentMode?: AgentMode;
+  mastermindId?: string;
   purpose?: HarnessAction;
   status: "running" | "exited" | "interrupted";
   createdAt: string;
@@ -90,6 +91,23 @@ export interface DirectoryListing {
   parent: string | null;
   directories: { name: string; path: string }[];
   truncated: boolean;
+}
+
+export interface MastermindConfig {
+  hostId: string;
+  harness: "claude" | "codex";
+  agentMode: AgentMode;
+  cwd: string;
+}
+export interface MastermindState {
+  revision: number;
+  enabled: boolean;
+  config?: MastermindConfig;
+  status: "unconfigured" | "disabled" | "waiting" | "starting" | "running" | "exited" | "interrupted" | "missing" | "blocked" | "uncertain";
+  stage: string;
+  error?: string;
+  session?: Session;
+  updatedAt: string;
 }
 
 export interface ProjectContextReport {
@@ -155,6 +173,7 @@ export interface FleetState {
   error: string | null;
   unauthorized: boolean;
   maintenanceJobs?: MaintenanceJob[];
+  mastermind?: MastermindState;
   reconnecting?: boolean;
   reconnectError?: string;
 }

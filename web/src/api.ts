@@ -1,4 +1,4 @@
-import type { AgentMode, Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
+import type { AgentMode, Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, MastermindConfig, MastermindState, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -57,7 +57,11 @@ export function bootstrap() {
 export const runtimePath = (host: string, suffix: string) => `/api/hosts/${encodeURIComponent(host)}/runtime/${suffix}`;
 export const hostPath = (host: string, suffix = "") => `/api/hosts/${encodeURIComponent(host)}${suffix ? `/${suffix}` : ""}`;
 export const api = {
-  state: () => request<{ version: string; hosts: Host[]; maintenanceJobs?: MaintenanceJob[] }>("/api/state"),
+  state: () => request<{ version: string; hosts: Host[]; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState }>("/api/state"),
+  mastermind: () => request<MastermindState>("/api/mastermind"),
+  configureMastermind: (revision: number, config: MastermindConfig) => request<MastermindState>("/api/mastermind/config", { method: "POST", body: JSON.stringify({ revision, ...config }) }),
+  startMastermind: (revision: number) => request<MastermindState>("/api/mastermind/start", { method: "POST", body: JSON.stringify({ revision }) }),
+  disableMastermind: (revision: number) => request<MastermindState>("/api/mastermind/disable", { method: "POST", body: JSON.stringify({ revision }) }),
   maintainHarness: (host: string, harness: string, action: "update" | "repair") => request<MaintenanceJob>(hostPath(host, `harnesses/${encodeURIComponent(harness)}/${action}`), { method: "POST" }),
   prepareProjectContext: (host: string, path: string) => request<ProjectContextReport>(hostPath(host, "project-context"), { method: "POST", body: JSON.stringify({ path }), signal: AbortSignal.timeout(190000) }),
   reconnect: () => request<{ queued: number }>("/api/reconnect", { method: "POST" }),

@@ -436,16 +436,18 @@ function Save-NativeWindow($Identity, [string]$Name = 'native-window.png', [swit
         Assert-True $captured 'Native window capture failed'
         $bitmap.Save((Join-Path $script:Artifacts $Name), [Drawing.Imaging.ImageFormat]::Png)
         if ($CheckContent) {
-            # Wait for visible content below the native chrome. This only
+            # Require contrasting content below the native chrome, rather than
+            # accepting an entirely blank light or dark background. This only
             # captures the exact owned HWND, never the screen or clipboard.
-            $painted = 0
+            $lightPixels = $darkPixels = 0
             for ($y = 90; $y -lt $height - 20; $y += 8) {
                 for ($x = [int]($width / 4); $x -lt $width - 20; $x += 8) {
                     $pixel = $bitmap.GetPixel($x, $y)
-                    if ($pixel.R -gt 100 -or $pixel.G -gt 100 -or $pixel.B -gt 100) {
-                        $painted++
-                        if ($painted -ge 40) { return $true }
-                    }
+                    $luminance = 0.2126 * $pixel.R + 0.7152 * $pixel.G + 0.0722 * $pixel.B
+                    if ($luminance -gt 180) {
+                        $lightPixels++
+                    } elseif ($luminance -lt 120) { $darkPixels++ }
+                    if ($lightPixels -ge 40 -and $darkPixels -ge 40) { return $true }
                 }
             }
             return $false
@@ -665,6 +667,105 @@ function Close-AppSession {
     }
 }
 
+function Read-NativeAppearance {
+    $result = Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+if (!window.__TAURI_INTERNALS__?.invoke) { done({ok:false}); return; }
+window.__TAURI_INTERNALS__.invoke('appearance',{}).then(value=>done({ok:true,value}),()=>done({ok:false}));
+'@
+    Assert-True $result.ok 'Native appearance IPC is unavailable'
+    $state = $result.value
+    Assert-True ($state.preference -cin @('system','light','dark') -and $state.resolved -cin @('light','dark')) 'Native appearance returned an invalid state'
+    return $state
+}
+
+function Assert-AppearanceViews($State) {
+    try {
+        foreach ($kind in @('content','chrome','menu')) {
+            [void](Wait-Until { Select-NativeView $kind } "appearance target $kind")
+            [void](Wait-Until {
+                Execute-JS 'return document.documentElement.dataset.theme === arguments[0] && getComputedStyle(document.documentElement).colorScheme === arguments[0];' @($State.resolved)
+            } "shared $($State.resolved) appearance in $kind")
+            $actual = Read-NativeAppearance
+            Assert-True ($actual.preference -ceq $State.preference -and $actual.resolved -ceq $State.resolved) "Native $kind disagrees on the shared preference"
+            $luminance = Execute-JS @'
+const color=getComputedStyle(document.body).backgroundColor.match(/^rgba?\(([^)]+)\)$/);
+if(!color) return null;
+const channels=color[1].split(',').map(Number);
+if(channels.length>3 && channels[3]!==1) return null;
+return channels.slice(0,3).reduce((total,channel)=>total+channel,0)/3;
+'@
+            Assert-True ($null -ne $luminance) "Native $kind has no opaque themed surface"
+            Assert-True (($State.resolved -ceq 'light' -and $luminance -gt 200) -or ($State.resolved -ceq 'dark' -and $luminance -lt 70)) "Native $kind retained the wrong palette"
+        }
+    } finally {
+        [void](Wait-Until { Select-NativeView 'content' } 'restore controller after appearance checks')
+    }
+}
+
+function Select-AppAppearance([string]$Preference) {
+    Assert-True ($Preference -cin @('system','light','dark')) 'Invalid test appearance preference'
+    [void](Wait-Until { Select-NativeView 'content' } 'controller appearance control')
+    [void](Wait-Until { Execute-JS 'const select=document.querySelector("select[aria-label=Appearance]");return !!select && !select.disabled;' } 'appearance control ready')
+    # Dispatch the select's normal React change handler. No physical input or
+    # operating-system preference is changed; the app performs the native IPC.
+    Assert-True (Execute-JS 'const select=document.querySelector("select[aria-label=Appearance]");if(!select || select.disabled)return false;select.value=arguments[0];select.dispatchEvent(new Event("change",{bubbles:true}));return true;' @($Preference)) 'Could not choose the app appearance'
+    [void](Wait-Until { Execute-JS 'const select=document.querySelector("select[aria-label=Appearance]");return !!select && !select.disabled && select.value===arguments[0] && !document.querySelector(".appearance-notice");' @($Preference) } 'appearance UI confirms native save')
+    $state = Read-NativeAppearance
+    Assert-True ($state.preference -ceq $Preference) 'UI choice did not reach the native preference store'
+    if ($Preference -ceq 'system') {
+        $expected = Execute-JS 'return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";'
+        Assert-True ($state.resolved -ceq $expected) 'System appearance disagrees with the current OS theme'
+    } else { Assert-True ($state.resolved -ceq $Preference) 'Fixed appearance was not applied' }
+    Assert-AppearanceViews $state
+    return $state
+}
+
+function Test-NativeAppearance {
+    [void](Wait-Until { Select-NativeView 'content' } 'initial native appearance')
+    $initial = Read-NativeAppearance
+    Assert-True ($initial.preference -ceq 'system') 'Isolated native appearance did not default to System'
+    foreach ($preference in @('light','dark','system')) {
+        $state = Select-AppAppearance $preference
+        Save-NativeWindow $script:NativeIdentity ("native-appearance-$preference.png")
+    }
+    $before = Read-NativeAppearance
+    $rejected = Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('appearance',{preference:'invalid'}).then(()=>done(false),()=>done(true));
+'@
+    Assert-True ($rejected -eq $true) 'Native appearance accepted a malformed preference'
+    $after = Read-NativeAppearance
+    Assert-True ($after.preference -ceq $before.preference -and $after.resolved -ceq $before.resolved) 'Rejected appearance request changed the shared state'
+    $wasMaximized = [RelayWindowProbe]::IsZoomed($script:NativeIdentity.Window)
+    $denied = Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('frame_action',{action:'maximize'}).then(()=>done(false),()=>done(true));
+'@
+    Assert-True ($denied -eq $true) 'Controller content was allowed to invoke a privileged frame action'
+    Assert-True ([RelayWindowProbe]::IsZoomed($script:NativeIdentity.Window) -eq $wasMaximized) 'Rejected frame action changed the native window'
+
+    [void](Select-AppAppearance 'light')
+    $saved = [IO.File]::ReadAllText((Join-Path $script:StateDirectory 'desktop\appearance.json')) | ConvertFrom-Json
+    Assert-True ($saved.format -eq 1 -and $saved.preference -ceq 'light') 'Fixed appearance was not durably saved in the isolated state'
+    $oldApp = $script:NativeIdentity
+    Close-AppSession
+    [void](Wait-Until {
+        $old = Get-Process -Id $oldApp.Id -ErrorAction SilentlyContinue
+        return $null -eq $old -or $old.StartTime.ToUniversalTime().Ticks -ne $oldApp.Started
+    } 'owned app exits before appearance relaunch')
+    Start-AppSession
+    $launch = Fresh-Launch
+    $controller = Controller-Identity $launch.pid
+    Assert-True ($controller.Id -eq $script:ControllerIdentity.Id -and $controller.Started -eq $script:ControllerIdentity.Started) 'Appearance relaunch replaced the persistent controller'
+    $restored = Read-NativeAppearance
+    Assert-True ($restored.preference -ceq 'light' -and $restored.resolved -ceq 'light') 'Fixed appearance did not survive native close/reopen'
+    Assert-True (Execute-JS 'return document.querySelector("select[aria-label=Appearance]")?.value === "light";') 'Reopened UI does not display the saved appearance'
+    Assert-AppearanceViews $restored
+    Save-NativeWindow $script:NativeIdentity 'native-appearance-reopened.png'
+    Write-Host 'PASS: native UI appearance synchronizes controller/chrome/menu, persists across app restart, and rejects invalid or privileged IPC'
+}
+
 function Test-NormalLaunch {
     Close-AppSession
     $normalEnvironment = $TestEnvironment.Clone()
@@ -767,6 +868,7 @@ try {
     [void](Wait-Until { Body-Contains 'Connect your first machine' } 'empty isolated Windows fleet')
     Write-Host 'PASS: native PE + Win32 window + WebView2, native controller and independent browser login'
     if ($LaunchOnly) {
+        Test-NativeAppearance
         [void](Wait-Until { Select-NativeView 'menu' } 'trusted portable menu')
         Assert-True (Execute-JS 'return JSON.stringify([...document.querySelectorAll("[data-action]")].map(button=>button.dataset.action)) === JSON.stringify(["reload","reconnect","close"]);') 'Portable app retained a browser-workspace action'
         [void](Wait-Until { Select-NativeView 'content' } 'portable fleet')

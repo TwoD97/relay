@@ -40,7 +40,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "home": s.home, "hostname": s.hostname})
+	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "home": s.home, "hostname": s.hostname, "capabilities": map[string]bool{"mastermindV1": true}})
 }
 func sortSessions(metas []Session) {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].CreatedAt.Before(metas[j].CreatedAt) })
@@ -57,13 +57,14 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
-	Title     string `json:"title"`
-	Workspace string `json:"workspace"`
-	Cwd       string `json:"cwd"`
-	Harness   string `json:"harness"`
-	AgentMode string `json:"agentMode"`
-	Cols      int    `json:"cols"`
-	Rows      int    `json:"rows"`
+	Title        string `json:"title"`
+	Workspace    string `json:"workspace"`
+	Cwd          string `json:"cwd"`
+	Harness      string `json:"harness"`
+	AgentMode    string `json:"agentMode"`
+	MastermindID string `json:"mastermindId"`
+	Cols         int    `json:"cols"`
+	Rows         int    `json:"rows"`
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +99,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err)
 		return
 	}
+	if req.MastermindID != "" && (!validMastermindID(req.MastermindID) || req.Harness == "shell") {
+		fail(w, 400, errors.New("mastermindId must be 32 lowercase hexadecimal characters on a Claude Code or Codex session"))
+		return
+	}
 	cwd, err := s.resolveCwd(req.Cwd)
 	if err != nil {
 		fail(w, 400, err)
@@ -129,6 +134,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.MastermindID != "" {
+			if err = s.validateMastermindAgent(r.Context(), req.Harness, path); err != nil {
+				fail(w, http.StatusUnprocessableEntity, err)
+				return
+			}
+		}
 		executable, exeErr := os.Executable()
 		if exeErr != nil {
 			fail(w, 500, exeErr)
@@ -136,15 +147,18 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		permissions = s.permissionCapability(r.Context(), req.Harness, path)
 		args = permissionHarnessArguments(req.Harness, executable, permissions.Support != "terminal-only")
-		args = agentModeArguments(req.Harness, mode, args)
+		args = sessionAgentArguments(req.Harness, mode, req.MastermindID != "", args)
 	}
 	if r.Context().Err() != nil {
 		fail(w, http.StatusRequestTimeout, errors.New("Session preparation was cancelled; no session was started"))
 		return
 	}
-	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, AgentMode: mode, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, out io.Writer) (*exec.Cmd, error) {
+	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, AgentMode: mode, MastermindID: req.MastermindID, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, out io.Writer) (*exec.Cmd, error) {
 		if mode == "auto" {
 			_, _ = io.WriteString(out, "Relay Auto: requesting full provider permissions for this session. Provider and organization restrictions still apply; startup errors remain in this terminal.\r\n")
+		}
+		if req.MastermindID != "" {
+			_, _ = io.WriteString(out, "Relay Mastermind: your fleet coordinator. Describe a task here; use Relay to discover machines and delegate work.\r\n")
 		}
 		return exec.Command(path, args...), nil
 	})

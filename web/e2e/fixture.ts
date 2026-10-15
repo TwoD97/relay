@@ -1,14 +1,15 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import type { AgentMode, Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, Session } from "../src/types";
+import type { AgentMode, Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, MastermindState, Session } from "../src/types";
 
 export const local: Host = { id: "local", name: "This computer", target: "local", port: 0, status: "online", stage: "Local runtime", createdAt: "2026-10-07T08:00:00Z" };
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
+  const mastermind: MastermindState = options.mastermind ?? { revision: 0, enabled: false, status: "unconfigured", stage: "Choose your Mastermind", updatedAt: "2026-10-15T08:00:00Z" };
   const approvals = options.approvals ?? {};
   const observers = options.observers ?? {};
   const mutations: { method: string; path: string; body: unknown; csrf: string | undefined }[] = [];
@@ -44,7 +45,21 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       }
       return json({ queued }, 202);
     }
-    if (path === "/api/state") { stateRequests++; return json({ version: "0.1.0-test", hosts, maintenanceJobs }); }
+    if (path === "/api/state") { stateRequests++; return json({ version: "0.1.0-test", hosts, maintenanceJobs, mastermind }); }
+    if (path === "/api/mastermind" && method === "GET") return json(mastermind);
+    if (path.startsWith("/api/mastermind/") && method === "POST") {
+      if (body.revision !== mastermind.revision) return json({ error: "Mastermind settings changed. Reload the current state." }, 409);
+      if (path.endsWith("/config")) {
+        const config = { hostId: body.hostId, harness: body.harness, agentMode: body.agentMode, cwd: body.cwd };
+        if (mastermind.enabled && JSON.stringify(mastermind.config) === JSON.stringify(config)) return json(mastermind, 202);
+        Object.assign(mastermind, { revision: mastermind.revision + 1, config, enabled: true, status: "starting", stage: "Starting your coordinator", session: undefined, updatedAt: new Date().toISOString() });
+      } else if (path.endsWith("/disable")) Object.assign(mastermind, { revision: mastermind.revision + 1, enabled: false, status: "disabled", stage: "Mastermind is paused; its session is preserved", updatedAt: new Date().toISOString() });
+      else if (path.endsWith("/start")) {
+        if (mastermind.status === "uncertain") return json({ error: "The previous startup outcome is unknown." }, 409);
+        Object.assign(mastermind, { revision: mastermind.revision + 1, enabled: true, status: mastermind.session?.status === "running" ? "running" : "starting", stage: "Checking your coordinator", updatedAt: new Date().toISOString() });
+      }
+      return json(mastermind, path.endsWith("/config") ? 202 : 200);
+    }
     if (path === "/api/hosts" && method === "POST") {
       const host: Host = { ...body, id: "new-host", status: "connecting", stage: "Authenticating with SSH", createdAt: new Date().toISOString() };
       hosts.push(host); sessions[host.id] = []; return json(host, 201);
@@ -166,7 +181,14 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     });
   });
   return {
-    hosts, sessions, maintenanceJobs, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
+    hosts, sessions, maintenanceJobs, mastermind, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
+    attachMastermind: () => {
+      const config = mastermind.config!;
+      const session: Session = { id: `mastermind-session-${mastermind.revision}`, title: "Mastermind", workspace: "Relay", cwd: config.cwd, harness: config.harness, agentMode: config.agentMode, mastermindId: "0123456789abcdef0123456789abcdef", status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      sessions[config.hostId] = [...(sessions[config.hostId] ?? []), session];
+      Object.assign(mastermind, { session: structuredClone(session), status: "running", stage: "Mastermind connected", updatedAt: new Date().toISOString() });
+      return session;
+    },
     startMaintenanceJob: (id: string) => {
       const job = maintenanceJobs.find((job) => job.id === id)!;
       const name = job.harness === "claude" ? "Claude Code" : "Codex";

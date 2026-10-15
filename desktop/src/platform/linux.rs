@@ -1,6 +1,33 @@
 use crate::launch::LaunchError;
 use std::{path::Path, process::Command, time::Instant};
 
+pub fn observe_system_appearance(app: &tauri::AppHandle) {
+    use gtk::prelude::*;
+    let Some(settings) = gtk::Settings::default() else {
+        return;
+    };
+    // Tao's Linux portal watcher updates this process-local GTK property, but
+    // its ThemeChanged uses a dummy window ID that Tauri does not forward.
+    // Observe the existing setting; never write the user's GTK/OS preference.
+    let handle = app.clone();
+    settings.connect_gtk_application_prefer_dark_theme_notify(move |settings| {
+        let theme = if settings.is_gtk_application_prefer_dark_theme() {
+            tauri::Theme::Dark
+        } else {
+            tauri::Theme::Light
+        };
+        crate::appearance::system_changed(&handle, theme);
+    });
+    crate::appearance::system_changed(
+        app,
+        if settings.is_gtk_application_prefer_dark_theme() {
+            tauri::Theme::Dark
+        } else {
+            tauri::Theme::Light
+        },
+    );
+}
+
 pub fn configure_frame(window: &tauri::Window) -> tauri::Result<()> {
     use gtk::prelude::*;
     use tauri::Manager;

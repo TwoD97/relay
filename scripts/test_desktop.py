@@ -194,6 +194,69 @@ class WebDriver:
     def terminal_contains(self, text):
         return self.script("const rows = document.querySelector('.xterm-rows'); return !!rows && rows.textContent.includes(arguments[0]);", text)
 
+    def appearance(self, preference=None):
+        arguments = {} if preference is None else {"preference": preference}
+        response = self.async_script("const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke('appearance',arguments[0]).then(value=>done({ok:true,value}),()=>done({ok:false}));", arguments)
+        require(response.get("ok") is True, "Native appearance IPC failed")
+        state = response["value"]
+        require(state.get("preference") in ("system", "light", "dark") and state.get("resolved") in ("light", "dark"), "Invalid native appearance state")
+        return state
+
+    def check_appearance_views(self, state):
+        current = self.call("GET", "/window")
+        seen = set()
+        try:
+            for handle in self.call("GET", "/window/handles"):
+                self.call("POST", "/window", {"handle": handle})
+                url = self.call("GET", "/url")
+                kind = "chrome" if url == "tauri://localhost/chrome.html" else "menu" if url == "tauri://localhost/menu.html" else "content"
+                seen.add(kind)
+                wait_for(lambda: self.script("return document.documentElement.dataset.theme; ") == state["resolved"], "native " + kind + " appearance")
+                require(self.script("return getComputedStyle(document.documentElement).colorScheme;") == state["resolved"], "Native color-scheme disagrees with appearance")
+                require(self.appearance() == state, "Native views disagree on the saved preference")
+        finally:
+            self.call("POST", "/window", {"handle": current})
+        require(seen == {"content", "chrome", "menu"}, "Appearance check missed a native view")
+
+    def check_appearance(self, artifacts):
+        require(self.appearance()["preference"] == "system", "Isolated native appearance did not default to System")
+        for preference in ("dark", "light", "system"):
+            state = self.appearance(preference)
+            require(state["preference"] == preference, "Native preference was not saved")
+            if preference != "system":
+                require(state["resolved"] == preference, "Explicit native appearance was not applied")
+            else:
+                expected = self.script("return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';")
+                require(state["resolved"] == expected, "Native System appearance disagrees with the OS")
+            self.check_appearance_views(state)
+            self.screenshot(artifacts / ("native-appearance-" + preference + ".png"))
+        denied = self.async_script("const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke('frame_action',{action:'maximize'}).then(()=>done(false),()=>done(true));")
+        require(denied is True, "Appearance capability granted controller window controls")
+        invalid = self.async_script("const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke('appearance',{preference:'invalid'}).then(()=>done(false),()=>done(true));")
+        require(invalid is True, "Native appearance accepted an invalid preference")
+        self.check_appearance_views(self.appearance("light"))
+        content_handle = self.call("GET", "/window")
+        try:
+            for page in ("index", "error"):
+                self.call("POST", "/url", {"url": "tauri://localhost/" + page + ".html"})
+                wait_for(lambda: self.script("return document.documentElement.dataset.theme;") == "light", "bundled " + page + " appearance")
+                require(self.appearance() == {"preference": "light", "resolved": "light"}, "Bundled page could not read native appearance")
+                require(self.script("return getComputedStyle(document.body).backgroundColor;") == "rgb(244, 246, 240)", "Bundled page kept its dark background")
+                self.screenshot(artifacts / ("native-appearance-" + page + ".png"))
+        finally:
+            # Returning from the local shell crosses origins. Follow Relay's
+            # actual Reconnect flow rather than weakening SameSite cookies.
+            reconnected = False
+            for handle in self.call("GET", "/window/handles"):
+                self.call("POST", "/window", {"handle": handle})
+                if self.call("GET", "/url") == "tauri://localhost/chrome.html":
+                    reconnected = self.async_script("const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke('frame_action',{action:'reconnect'}).then(()=>done(true),()=>done(false));")
+                    break
+            self.call("POST", "/window", {"handle": content_handle})
+            require(reconnected, "Trusted chrome could not reconnect after bundled appearance checks")
+        wait_for(lambda: self.body_contains("Fleet overview"), "fleet restored after bundled appearance checks")
+        print("PASS: native Light/Dark/System IPC, chrome/menu parity and frame permission isolation", flush=True)
+
     def find(self, using, value):
         return self.call("POST", "/element", {"using": using, "value": value})[ELEMENT]
 
@@ -409,6 +472,8 @@ def run(args):
                 wait_for(lambda: browser.script("return document.querySelector('.page-heading h1')?.textContent==='Fleet overview';") and
                          browser.body_contains("This computer"), "native fleet rendering", 60)
                 browser.check_frame()
+                browser.check_appearance(artifacts)
+                require(json.loads((state / "desktop" / "appearance.json").read_text()) == {"format": 1, "preference": "light"}, "Native preference was not durably saved")
                 identity = controller_identity(control_socket)
                 launch = launch_handshake(binary, bundle, state, runtime, environment)
                 require(launch["pid"] == identity[0], "Desktop helper did not reuse the native controller")
@@ -462,6 +527,9 @@ def run(args):
                 wait_for(lambda: browser.script("return document.querySelector('.page-heading h1')?.textContent==='Fleet overview';") and
                          browser.body_contains("This computer"), "reopened native fleet", 60)
                 require(controller_identity(control_socket) == identity, "Reopening native app replaced the shared controller")
+                appearance = browser.appearance()
+                require(appearance == {"preference": "light", "resolved": "light"}, "Appearance did not survive native close/reopen")
+                browser.check_appearance_views(appearance)
                 browser.call("POST", "/url", {"url": second.origin + "/#host/local/session/" + session})
                 wait_for(lambda: browser.body_contains("Watching") and browser.body_contains("Desktop smoke"), "reopened persistent session")
                 wait_for(lambda: browser.terminal_contains("RELAY_NATIVE_INPUT_OK") and

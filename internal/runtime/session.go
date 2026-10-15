@@ -319,6 +319,15 @@ func (s *Server) start(meta Session, cols, rows int, factory commandFactory) (Se
 		cancel()
 		return Session{}, errors.New("runtime is shutting down")
 	}
+	if meta.MastermindID != "" {
+		for _, existing := range s.sessions {
+			if existing.snapshot().MastermindID == meta.MastermindID {
+				s.mu.Unlock()
+				cancel()
+				return Session{}, errors.New("a session already exists for this Mastermind launch; reconnect to that session")
+			}
+		}
+	}
 	if !maintenancePurpose(meta.Purpose) && s.installing[meta.Harness] {
 		s.mu.Unlock()
 		cancel()

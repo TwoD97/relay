@@ -16,7 +16,7 @@ import (
 // provider's normal instructions; it never replaces project or user config.
 const autoAgentInstruction = `Relay session mode: Auto, explicitly selected by the user for this new session.
 The user authorizes you to complete their requested task end-to-end using the tools and full permissions available in this session, without pausing for routine tool approvals. Stay within the user's task and follow applicable project instructions and organization policy. Do not invent a task, expand its scope, or treat tool access as authorization for unrelated work. If no task has been provided, wait for the user's task.
-When the user's task refers to a named Relay machine, discover the available machines with: relay_cli="$HOME/.local/share/relay/bin/relay"; "$relay_cli" fleet list
+When the user's task refers to a named Relay machine, discover the available machines with: relay_cli="${RELAY_BIN:-$HOME/.local/share/relay/bin/relay}"; "$relay_cli" fleet list
 Use the returned machine names with Relay session commands, for example: "$relay_cli" session list --host NAME. Resolve names through Relay; do not guess SSH destinations or copy credentials between machines. New delegated sessions remain Manual unless the user requests autonomous delegation; only then pass --mode auto when starting that delegated agent session.`
 
 func normalizedAgentMode(harness, mode string) (string, error) {

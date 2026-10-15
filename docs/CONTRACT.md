@@ -7,7 +7,12 @@ API namespace and data directories belong to Relay.
 
 ## Controller HTTP API (same origin, session cookie, CSRF)
 
-- `GET /api/state`: `{version, hosts: Host[]}`
+- `GET /api/state`: `{version, hosts: Host[], maintenanceJobs, mastermind}`
+- `GET /api/mastermind`: controller-owned coordinator configuration and status.
+- `POST /api/mastermind/config`: `{revision,hostId,harness,agentMode,cwd}`;
+  saves a new choice and queues one startup. Revisions use compare-and-swap.
+- `POST /api/mastermind/start|disable`: `{revision}`; explicitly starts/resumes
+  or disables automatic attachment. Disabling preserves the remote session.
 - `POST /api/hosts`: `{name,target,port?}` -> Host. target is an OpenSSH alias or
   `user@hostname`; validated before argv use. Starts the setup PTY.
 - `POST /api/hosts/{id}/connect`: retry login/bootstrap. No body.
@@ -24,7 +29,8 @@ API namespace and data directories belong to Relay.
 - `/api/hosts/{id}/runtime/*`: proxy to daemon `/api/*`, HTTP and WebSocket.
 - `GET /api/bootstrap`: `{csrf,version}`. Mutations use `X-Relay-CSRF`.
 - `GET /auth?token=...`: consumes startup token into HttpOnly SameSite=Strict cookie;
-  redirects to `/`. Never put credentials in terminal websocket URLs.
+  hands off to `/` with a fixed local document for external/native navigation,
+  or a same-origin redirect. Never put credentials in terminal websocket URLs.
 
 Host: `{id,name,target,port,status,stage,error?,createdAt}`. status:
 `disconnected|connecting|installing|online|error`. Stage is human-readable.
@@ -32,9 +38,10 @@ Poll state every 2 seconds, preserving form and terminal state.
 
 ## Runtime API (private Unix socket, SSH-only transport)
 
-`GET /api/health`: `{version,protocol:1,home,hostname}`.
+`GET /api/health`: `{version,protocol:1,home,hostname,capabilities:{mastermindV1:true}}`.
+Capabilities are additive; older runtimes may omit them.
 `GET /api/sessions`: Session[].
-`POST /api/sessions`: `{title,workspace,cwd,harness,cols?,rows?}` -> Session.
+`POST /api/sessions`: `{title,workspace,cwd,harness,agentMode?,mastermindId?,cols?,rows?}` -> Session.
 Harness `shell|claude|codex`. No arbitrary executable from this request.
 `PATCH /api/sessions/{id}`: `{title?,workspace?}` -> Session.
 `DELETE /api/sessions/{id}`: sends termination to process group, then removes session.
@@ -55,7 +62,7 @@ atomically switch the managed launcher. Same-harness maintenance conflicts retur
 managed replacement without modifying external binaries or provider credentials.
 `POST /api/harnesses/{id}/login`: -> Session for provider login PTY.
 
-Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,permissions?,agentMode?,purpose?,processIdentity?,recovery?}`.
+Session: `{id,title,workspace,cwd,harness,status,createdAt,updatedAt,exitCode?,attention?,permissions?,agentMode?,mastermindId?,purpose?,processIdentity?,recovery?}`.
 `purpose:"login"` identifies an ephemeral provider-login transcript: memory only
 while active, cleared on exit, and never persisted as terminal history.
 Attention: `{kind:"completed"|"notification"|"permission",source,updatedAt}`.
@@ -67,6 +74,23 @@ literal autonomy instruction; unsupported CLI flags reject creation. It does
 not change existing sessions or grant OS/SSH authority. The persisted field
 records launch choice, independently of hook-observed permission state. See
 [ACTIVITY.md](ACTIVITY.md#agent-launch-modes) for the provider contract.
+
+Mastermind startup requires `mastermindV1` and a signed-in provider. Its
+`mastermindId` is a 32-character lowercase hexadecimal launch identity, never
+derived from a title. The runtime persists it and adds a fixed coordinator role
+to the CLI instructions without replacing project policy or upgrading Manual
+permissions. Concurrent duplicate launch identities are rejected while their
+session record exists. This is not a promise that deleted sessions can be
+recreated idempotently: the controller never replays an unconfirmed POST.
+
+The controller persists the selected host identity, canonical folder, launch
+identity, and creation intent before dispatch. Recovery only lists sessions and
+checks the exact token, harness, mode, folder, session ID, and creation time.
+Unknown outcomes remain visible. Configuration changes preserve prior sessions;
+the overview connects only to a fresh, exact matching session. A disabled
+coordinator releases its viewer without stopping the agent. A corrupt optional
+Mastermind state file disables that feature and preserves the file; other fleet
+functions remain available.
 
 Named fleet discovery is an agent CLI capability, independent of runtime HTTP
 support. The controller publishes bounded, private snapshots beside each
@@ -154,7 +178,11 @@ Closing the native window leaves the controller and PTYs running.
 The undecorated native window contains a controller content webview and separate
 bundled title-bar/menu webviews. Only the bundled frame labels and exact local
 URLs may invoke the closed set of window/menu actions, checked by both Tauri
-capabilities and the native handler. Controller content has no native capability.
+capabilities and the native handler. Controller content may only read/save the
+appearance preference; the native handler checks its exact current loopback
+origin and content label independently of that narrow Tauri capability.
+System/Light/Dark is stored in native app configuration, outside controller-port
+storage. Native broadcasts synchronize all three views without reconnecting PTYs.
 All content navigation remains restricted to the authenticated controller origin
 and bundled loading/error pages. No arbitrary shell, filesystem, or URL-opening
 action is available to the frame.

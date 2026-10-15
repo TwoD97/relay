@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod appearance;
 mod frame;
 mod launch;
 mod platform;
@@ -26,6 +27,8 @@ struct DesktopState {
     menu_generation: Arc<AtomicU64>,
     frame_actions: Arc<Mutex<()>>,
     error_message: Arc<Mutex<Option<String>>>,
+    appearance: Arc<Mutex<appearance::Store>>,
+    appearance_actions: Arc<Mutex<()>>,
 }
 
 fn main() {
@@ -55,9 +58,12 @@ fn run() -> tauri::Result<()> {
         }));
     }
     builder
-        .invoke_handler(tauri::generate_handler![frame::frame_action])
+        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance])
         .manage(DesktopState::default())
         .setup(|app| {
+            appearance::initialize(app.handle());
+            let initial_appearance = appearance::initialization_script(app.handle());
+            let initial_background = appearance::initial_background(app.handle());
             let state = app.state::<DesktopState>().inner().clone();
             let origin = state.origin.clone();
             let error_message = state.error_message.clone();
@@ -67,7 +73,8 @@ fn run() -> tauri::Result<()> {
                 .min_inner_size(390.0, 500.0)
                 .decorations(false)
                 .visible(false)
-                .background_color(tauri::window::Color(16, 19, 18, 255))
+                .background_color(initial_background)
+                .initialization_script(&initial_appearance)
                 // Only this webview can reach the authenticated controller,
                 // with navigation constrained below. Enable its standard web
                 // clipboard API for explicit copy/paste gestures; no native
@@ -84,6 +91,9 @@ fn run() -> tauri::Result<()> {
                                 .unwrap_or(false)
                     })
                     .on_page_load(move |webview, payload| {
+                        if payload.event() == PageLoadEvent::Finished {
+                            appearance::page_loaded(webview.as_ref());
+                        }
                         if payload.event() != PageLoadEvent::Finished
                             || !is_shell_page(payload.url())
                             || payload.url().path() != "/error.html"
@@ -107,11 +117,13 @@ fn run() -> tauri::Result<()> {
             content.as_ref().set_auto_resize(false)?;
             window.add_child(
                 WebviewBuilder::new("chrome", WebviewUrl::App("chrome.html".into()))
-                    .background_color(tauri::window::Color(16, 19, 18, 255))
+                    .initialization_script(&initial_appearance)
+                    .background_color(initial_background)
                     .on_navigation(|url| frame::trusted_page("chrome", url))
                     .on_new_window(|_, _| NewWindowResponse::Deny)
                     .on_page_load(|webview, payload| {
                         if payload.event() == PageLoadEvent::Finished {
+                            appearance::page_loaded(&webview);
                             frame::update_state(&webview.window());
                         }
                     })
@@ -121,9 +133,15 @@ fn run() -> tauri::Result<()> {
             )?;
             let menu_view = window.add_child(
                 WebviewBuilder::new("app-menu", WebviewUrl::App("menu.html".into()))
-                    .background_color(tauri::window::Color(23, 28, 25, 255))
+                    .initialization_script(&initial_appearance)
+                    .background_color(initial_background)
                     .on_navigation(|url| frame::trusted_page("app-menu", url))
                     .on_new_window(|_, _| NewWindowResponse::Deny)
+                    .on_page_load(|webview, payload| {
+                        if payload.event() == PageLoadEvent::Finished {
+                            appearance::page_loaded(&webview);
+                        }
+                    })
                     .devtools(false),
                 LogicalPosition::new(8.0, frame::HEIGHT + 4.0),
                 LogicalSize::new(frame::MENU_WIDTH, frame::MENU_HEIGHT),
@@ -140,6 +158,7 @@ fn run() -> tauri::Result<()> {
                     // Child webview focus transfers can transiently report
                     // false here. The menu handles settled DOM focus loss.
                 }
+                WindowEvent::ThemeChanged(theme) => appearance::system_changed(frame_window.app_handle(), *theme),
                 _ => {}
             });
             let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
@@ -161,6 +180,10 @@ fn run() -> tauri::Result<()> {
             window.set_menu(Menu::with_items(app, &[&relay])?)?;
             // Keep native accelerators while drawing all visible chrome ourselves.
             window.hide_menu()?;
+            if let Ok(theme) = window.theme() {
+                appearance::system_changed(app.handle(), theme);
+            }
+            platform::observe_system_appearance(app.handle());
             frame::layout(&window);
             match app
                 .path()
@@ -189,8 +212,8 @@ fn run() -> tauri::Result<()> {
             "quit" => app.exit(0),
             _ => {}
         })
-        // The controller view has no native capabilities. Only immutable bundled
-        // chrome can invoke the small, independently checked frame command.
+        // The controller may change appearance only. Immutable bundled chrome
+        // alone can invoke the independently checked frame command.
         // Closing the window leaves controllers and terminal sessions running.
         .run(tauri::generate_context!())
 }

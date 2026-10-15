@@ -256,6 +256,14 @@ func (s *Server) disconnectHost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) forgetHost(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mu.Lock()
+	if s.mastermind != nil {
+		mastermind := s.mastermind.current()
+		if mastermind.Enabled && mastermind.Config != nil && mastermind.Config.HostID == id {
+			s.mu.Unlock()
+			writeError(w, 409, "Disable Mastermind or choose another machine before forgetting its host. Its session will be preserved.")
+			return
+		}
+	}
 	if _, ok := s.store.get(id); !ok {
 		s.mu.Unlock()
 		writeError(w, 404, "Host not found")

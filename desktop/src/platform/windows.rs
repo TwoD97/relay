@@ -4,6 +4,10 @@ use std::{os::windows::process::CommandExt, path::Path, process::Command, time::
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CONTROLLER: &str = "relay-controller-windows-amd64.exe";
 
+pub fn observe_system_appearance(_app: &tauri::AppHandle) {
+    // Windows forwards native ThemeChanged events to the main window.
+}
+
 pub fn show_startup_failure() {
     // A GUI executable has no console, and a missing WebView2 Runtime prevents
     // even the bundled error page from opening. Show fixed native guidance;

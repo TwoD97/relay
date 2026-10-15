@@ -26,7 +26,15 @@ window or choosing **Quit Relay** leaves the controller, SSH connections, and
 terminal sessions running. Reopening the app reconnects to the matching controller.
 Starting the default desktop app again focuses its existing window.
 
-The dark title bar replaces the native title and menu bars. Drag its center to
+The **Appearance** selector in the app's top bar defaults to **System** and also
+offers **Light** and **Dark**. It updates the app, terminal ANSI palette, title
+bar, menu, loading screen, and connection errors together. Preferences are saved
+in the native app configuration directory, independent of the local controller
+port. It does not change your operating system or provider settings, reconnect
+terminals, or restart sessions. Explicit RGB colors printed by remote programs
+remain unchanged.
+
+The custom title bar replaces the native title and menu bars. Drag its center to
 move the window, double-click to maximize or restore, and use the right-hand
 buttons to minimize, maximize, or close. The **relay.** button opens the application
 menu with Reload, Reconnect, and Quit. Keyboard shortcuts are Ctrl+R,
@@ -188,7 +196,8 @@ interactive Windows gate is `test_windows_desktop.ps1`; it requires a matching
 WebView2 driver and a disposable Linux SSH host. Hosted Windows CI does not claim
 to cover native mouse/focus behavior; run that interactive gate before shipping.
 Its `-LaunchOnly` mode needs no SSH fixture and checks an extracted app's default
-resources, embedded fleet, private authentication, and ordinary native launch.
+resources, embedded fleet, private authentication, appearance synchronization
+and persistence, privileged-command isolation, and ordinary native launch.
 It uses isolated state and a separate WebView2 profile, disables single-instance
 activation for that test, and does not send mouse/keyboard input or access the
 clipboard. Cleanup is scoped to its own process identities.

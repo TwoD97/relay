@@ -3,6 +3,8 @@ import { ArrowRight, ArrowUpRight, Bell, BookOpen, Check, CircleAlert, Folder, L
 import { approvalActionable } from "./Approvals";
 import { ObserverSettings, type ObserverActions } from "./Observer";
 import { AgentModeBadge } from "./AgentMode";
+import { Mastermind } from "./Mastermind";
+import type { MastermindActions } from "./useMastermind";
 import { HostStatus } from "./Sidebar";
 import type { FleetState, Host, RuntimeState, Session, SessionSummary } from "./types";
 import "./Fleet.css";
@@ -10,6 +12,7 @@ import "./Fleet.css";
 type Props = {
   state: FleetState;
   observer: ObserverActions;
+  mastermind: MastermindActions;
   onAdd: () => void;
   onHost: (host: Host) => void;
   onActivity: () => void;
@@ -32,7 +35,7 @@ function summaryStatus(host: Host, runtime?: RuntimeState) {
   return `Summaries on · ${runtime.observer.config.model}`;
 }
 
-export function FleetOverview({ state, observer, onAdd, onHost, onActivity, onSession, onNew }: Props) {
+export function FleetOverview({ state, observer, mastermind, onAdd, onHost, onActivity, onSession, onNew }: Props) {
   const [settings, setSettings] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "running" | "finished">("all");
   const online = state.hosts.filter((host) => host.status === "online");
@@ -54,6 +57,7 @@ export function FleetOverview({ state, observer, onAdd, onHost, onActivity, onSe
       <Metric icon={<Terminal size={17} />} label="Processes running" value={state.hosts.length > 0 && unavailable.length === state.hosts.length ? null : running.length} detail={unavailable.length ? `${unavailable.length} ${unavailable.length === 1 ? "machine" : "machines"} unverified` : "Confirmed on connected machines"} />
       <Metric icon={<Bell size={17} />} label="Needs review" value={state.error ? null : requests.length + notifications.length} detail="Permission requests & notifications" />
     </div>
+    <Mastermind fleet={state} actions={mastermind} onAdd={onAdd} onHost={onHost} onSession={onSession} onActivity={onActivity} />
     {state.loading ? <div className="empty-card loading-card"><LoaderCircle className="spin" size={24} /><h2>Finding your machines…</h2><p>Connecting to your local Relay controller.</p></div> : !state.hosts.length ? <div className="empty-card fleet-empty"><span className="fleet-empty-icon"><Terminal size={32} /></span><span className="eyebrow">START WITH ONE MACHINE</span><h2>Your next workspace is one connection away.</h2><p>Connect a Linux machine over SSH. Relay keeps your terminal sessions available when you leave and come back.</p><button className="button primary" onClick={onAdd}>Connect your first machine <ArrowRight size={16} /></button><div className="empty-benefits"><span><Check size={14} />SSH keys or password</span><span><Check size={14} />No root required</span></div></div> : <>
       <section className={`fleet-attention ${!requests.length && !notifications.length ? "is-quiet" : ""}`} aria-label="Needs review">
         <div className="section-heading"><div><h2>Needs review <span>{requests.length + notifications.length}</span></h2><p>Review permission requests and agent notifications.</p></div><button className="text-button" onClick={onActivity}>Open Activity <ArrowRight size={14} /></button></div>

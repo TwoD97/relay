@@ -43,7 +43,7 @@ jobs:
       - run: ./scripts/build.sh
       - run: ./scripts/build-windows-controller.sh
       - name: Real binary browser checks
-        run: RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts 2>&1 | tee .test-artifacts/live-browser.log
+        run: RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts 2>&1 | tee .test-artifacts/live-browser.log
       - name: Real two-host orchestration, recovery and harness bootstrap
         env:
           RELAY_SSH_INTEGRATION: '1'

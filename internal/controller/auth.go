@@ -86,7 +86,7 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		if !s.allowedHost(r.Host) {
 			http.Error(w, "Invalid host", http.StatusForbidden)
 			return
@@ -107,9 +107,12 @@ func (s *Server) secure(next http.Handler) http.Handler {
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.sessionToken, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
-			if crossOrigin {
+			fetchSite := r.Header.Get("Sec-Fetch-Site")
+			if crossOrigin || fetchSite == "" || fetchSite == "none" {
 				// A redirect keeps the external navigation's cross-site context:
 				// its Strict cookie would be omitted and the root request denied.
+				// Native WebKit navigation can omit Fetch Metadata or report
+				// "none" after a local app page; neither proves a same-site context.
 				// Loading this document starts a fresh same-origin navigation while
 				// keeping the exception confined to this one-time login endpoint.
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")

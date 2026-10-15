@@ -114,6 +114,11 @@ func TestBrowserSecurityBoundaries(t *testing.T) {
 	if r.Header.Get("Referrer-Policy") != "no-referrer" || r.Header.Get("Content-Security-Policy") == "" {
 		t.Fatal("security headers missing")
 	}
+	policy := r.Header.Get("Content-Security-Policy")
+	if !strings.Contains(policy, "connect-src 'self' ipc: http://ipc.localhost;") ||
+		!strings.Contains(policy, "script-src 'self';") || !strings.Contains(policy, "frame-ancestors 'none';") {
+		t.Fatal("desktop IPC must retain script and framing restrictions")
+	}
 }
 
 func TestLaunchLinkTopLevelNavigation(t *testing.T) {

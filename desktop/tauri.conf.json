@@ -22,6 +22,35 @@
           "permissions": [
             "allow-frame-action"
           ]
+        },
+        {
+          "identifier": "desktop-appearance-local",
+          "description": "Read or save appearance from exact bundled Relay pages.",
+          "local": true,
+          "webviews": [
+            "main",
+            "chrome",
+            "app-menu"
+          ],
+          "permissions": [
+            "allow-appearance"
+          ]
+        },
+        {
+          "identifier": "desktop-appearance-controller",
+          "description": "Appearance only for the current Relay controller; native code checks its exact origin.",
+          "local": false,
+          "remote": {
+            "urls": [
+              "http://127.0.0.1:*"
+            ]
+          },
+          "webviews": [
+            "main"
+          ],
+          "permissions": [
+            "allow-appearance"
+          ]
         }
       ],
       "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"

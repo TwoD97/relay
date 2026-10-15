@@ -35,7 +35,14 @@ Saved hosts reconnect automatically, with at most four SSH setups at a time.
 Passwords and new host-key decisions still require attention in the host's setup
 terminal; passwords are never saved. Failed logins are not retried in a loop.
 
-The desktop has a dark custom title bar with dragging, minimize, maximize,
+The **Appearance** selector in the top bar offers **System**, **Light**, and
+**Dark**. System follows your computer's appearance automatically. The setting
+covers the app, terminal palette, title bar, menus, and connection screens, and
+is saved on this device across app restarts. Switching it keeps terminal output,
+selection, and control intact. Programs that print explicit RGB colors retain
+those colors; their own theme settings still apply.
+
+The desktop has a custom title bar with dragging, minimize, maximize,
 restore, close, and a Relay menu. Its trusted frame is separate from the app
 content; no filesystem or shell APIs are exposed to either view. SSH and process
 management stay in the controller/runtime.
@@ -81,6 +88,29 @@ its transcript is not written to disk and is cleared when login exits. The
 provider CLI manages its own authenticated credentials in its normal location.
 Automatic Node installation uses glibc Linux builds; musl-only hosts need a
 compatible existing Node installation.
+
+### Mastermind
+
+Fleet overview includes an interactive **Mastermind** workspace. Choose its
+machine, signed-in Claude Code or Codex harness, working folder, and Manual or
+Auto permission mode, then choose **Save and start Mastermind**. The agent runs
+on that machine and appears directly in the overview. Describe your task in its
+terminal; its Relay instructions explain how to discover named machines and
+coordinate their sessions. This is separate from the optional summary observer.
+
+Relay saves this choice and reconnects to the same session when the app opens.
+Closing Relay leaves it running. **Settings** lets you change the choice later;
+switching starts a new conversation and preserves the previous session in its
+machine's session list. An exited coordinator is shown as finished until you
+explicitly start a new one. **Pause Mastermind** disconnects the overview panel;
+the agent keeps running on its machine.
+
+Startup belongs to the controller, so reloading a view or opening another window
+does not create another agent. Relay records an explicit launch identity before
+starting it. If the response is lost, it checks that identity without replaying
+the launch. An unresolved outcome remains visible for inspection. Older runtimes
+must be upgraded before Mastermind can start. Wait for their active sessions to
+finish before activating the new runtime; Relay does not restart them for you.
 
 The terminal is a real PTY. In **Start a session**, choose **Browse** to select an
 existing project folder on the connected host. Navigate Home, parent folders, or

@@ -70,7 +70,7 @@ func TestLoginLinkRedemptionIsAtomic(t *testing.T) {
 	close(statuses)
 	accepted := 0
 	for status := range statuses {
-		if status == http.StatusSeeOther {
+		if status == http.StatusOK {
 			accepted++
 		} else if status != http.StatusUnauthorized {
 			t.Fatalf("unexpected redemption status %d", status)

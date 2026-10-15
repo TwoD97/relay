@@ -1,0 +1,49 @@
+.mastermind { margin-bottom: 28px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface); overflow: hidden; }
+.mastermind-heading { display: flex; align-items: flex-start; gap: 12px; padding: 19px 20px; }
+.mastermind-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border: 1px solid var(--accent-line); border-radius: 9px; color: var(--accent-text); background: var(--accent-soft); }
+.mastermind-heading > div { flex: 1; min-width: 0; }
+.mastermind-title { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.mastermind-title h2 { font-size: 16px; font-weight: 600; letter-spacing: -.25px; }
+.mastermind-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.mastermind-actions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.mastermind-state { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; color: var(--muted); font-size: 9px; }
+.mastermind-state.running { color: var(--success); border-color: var(--success-line); background: var(--success-bg); }
+.mastermind-state.attention { color: var(--warning); border-color: var(--warning-line); background: var(--warning-bg); }
+.mastermind-context { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 0 20px 16px; color: var(--text-secondary); font-size: 10px; }
+.mastermind-context > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.mastermind-context .mono { overflow-wrap: anywhere; }
+.mastermind-terminal { display: flex; height: clamp(300px, 43vh, 510px); min-height: 0; border-top: 1px solid var(--line); }
+.mastermind-terminal .terminal-shell { width: 100%; }
+.mastermind-empty { display: flex; align-items: center; gap: 18px; padding: 0 20px 20px; }
+.mastermind-empty > div { flex: 1; min-width: 0; }
+.mastermind-empty h3 { font-size: 13px; font-weight: 550; }
+.mastermind-empty p, .mastermind-note { color: var(--muted); font-size: 11px; line-height: 1.75; }
+.mastermind-empty p { margin-top: 6px; max-width: 620px; }
+.mastermind-notice { display: flex; align-items: flex-start; gap: 9px; padding: 13px 20px; border-top: 1px solid var(--warning-line); background: var(--warning-bg); color: var(--warning); font-size: 11px; line-height: 1.7; }
+.mastermind-notice > svg { margin-top: 2px; flex-shrink: 0; }
+.mastermind-notice > div { flex: 1; min-width: 0; }
+.mastermind-notice .text-button { font-size: 11px; }
+.mastermind > .inline-error { margin: 0 20px 17px; }
+.mastermind-setup { gap: 19px; }
+.mastermind-setup .harness-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mastermind-setup .harness-option { min-height: 80px; }
+.mastermind-setup .field select { min-width: 0; }
+.mastermind-prerequisite { display: flex; align-items: flex-start; gap: 9px; padding: 12px; background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 7px; }
+.mastermind-prerequisite > div { flex: 1; min-width: 0; }
+.mastermind-prerequisite p { font-size: 11px; color: var(--text-secondary); line-height: 1.75; }
+.mastermind-prerequisite .text-button { margin-top: 3px; font-size: 11px; }
+.mastermind-setup .modal-actions { flex-wrap: wrap; }
+.mastermind-footer { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.mastermind-footer > p { flex: 1; }
+@media (max-width: 650px) {
+  .mastermind-heading { padding: 16px; flex-wrap: wrap; gap: 10px; }
+  .mastermind-heading > div { flex-basis: calc(100% - 46px); }
+  .mastermind-actions { margin-left: 46px; flex-wrap: wrap; }
+  .mastermind-context { padding: 0 16px 14px; gap: 7px 12px; }
+  .mastermind-empty { padding: 0 16px 17px; align-items: flex-start; flex-direction: column; gap: 13px; }
+  .mastermind-empty > .button { width: 100%; }
+  .mastermind-terminal { height: 370px; }
+  .mastermind-notice { padding: 12px 16px; }
+  .mastermind-footer { padding: 14px 16px; flex-wrap: wrap; }
+  .mastermind > .inline-error { margin: 0 16px 15px; }
+}
