@@ -1,6 +1,6 @@
 [package]
 name = "relay-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Relay native desktop client"
 authors = ["Tudosa Denys", "Relay contributors"]
 repository = "https://github.com/TwoD97/relay"

@@ -36,6 +36,9 @@ type mastermindRuntimeFixture struct {
 	entered       chan struct{}
 	release       chan struct{}
 	beforeCreate  func()
+	legacyStrict  bool
+	workerInput   func(http.ResponseWriter, *http.Request, string)
+	inputs        []string
 }
 
 func newMastermindRuntime(t *testing.T) (*mastermindRuntimeFixture, *httptest.Server) {
@@ -65,8 +68,22 @@ func (f *mastermindRuntimeFixture) handle(w http.ResponseWriter, r *http.Request
 		if f.beforeCreate != nil {
 			f.beforeCreate()
 		}
+		var fields map[string]json.RawMessage
+		if json.NewDecoder(r.Body).Decode(&fields) != nil {
+			writeError(w, 400, "invalid fixture body")
+			return
+		}
+		if f.legacyStrict {
+			for key := range fields {
+				if key != "title" && key != "workspace" && key != "cwd" && key != "harness" {
+					writeError(w, 400, "legacy runtime received unsupported field: "+key)
+					return
+				}
+			}
+		}
+		data, _ := json.Marshal(fields)
 		var request MastermindSession
-		if json.NewDecoder(r.Body).Decode(&request) != nil {
+		if json.Unmarshal(data, &request) != nil {
 			writeError(w, 400, "invalid fixture body")
 			return
 		}
@@ -94,6 +111,20 @@ func (f *mastermindRuntimeFixture) handle(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeJSON(w, 201, request)
+	case strings.HasPrefix(r.URL.Path, "/api/sessions/") && strings.HasSuffix(r.URL.Path, "/input") && r.Method == "POST":
+		var body struct {
+			Data string `json:"data"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			writeError(w, 400, "invalid input fixture body")
+			return
+		}
+		f.inputs = append(f.inputs, body.Data)
+		if f.workerInput == nil {
+			writeError(w, 500, "unexpected fixture input")
+			return
+		}
+		f.workerInput(w, r, body.Data)
 	default:
 		writeError(w, 404, "unexpected fixture request")
 	}
@@ -125,6 +156,9 @@ func awaitMastermindRead(t *testing.T, f *mastermindRuntimeFixture, previous int
 
 func mastermindController(t *testing.T, dir, endpoint string) (*Server, *httptest.Server, *http.Client) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "runtime", "run"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -340,14 +374,18 @@ func TestMastermindPreflightBlocksOldRuntimeAndUnsignedInHarness(t *testing.T) {
 			}
 			s, ts, c := mastermindController(t, t.TempDir(), backend.URL)
 			mastermindSetup(t, s, ts, c, 0, "claude")
-			awaitMastermind(t, s, "blocked")
+			blocked := awaitMastermind(t, s, "blocked")
 			if f.createCount() != 0 {
 				t.Fatal("failed readiness started an agent")
 			}
 			f.mu.Lock()
 			f.supported, f.authenticated = true, true
 			f.mu.Unlock()
-			s.wakeMastermind()
+			if reason == "capability" {
+				mastermindPost(t, s, ts, c, "start", map[string]any{"revision": blocked.Revision}, 200)
+			} else {
+				s.wakeMastermind()
+			}
 			awaitMastermind(t, s, "running")
 			if f.createCount() != 1 {
 				t.Fatal("completed setup did not start exactly once")

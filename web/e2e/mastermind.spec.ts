@@ -79,17 +79,100 @@ test("Auto is explicit and remains selected but blocked when fresh capability di
   await expect(region(page).getByLabel("Launch mode: Auto · full access", { exact: true })).toBeVisible();
 });
 
-test("older runtime blocks Auto and reports Mastermind upgrade without ordinary session fallback", async ({ page }) => {
-  const fixture = await mockFleet(page, { ...fixtureOptions(), sessionModes: {} });
+for (const mode of ["manual", "auto"] as const) test(`older runtime uses a verified ${mode} worker without inventing agent metadata`, async ({ page }) => {
+  const fixture = await mockFleet(page, { ...fixtureOptions(), sessionModes: {}, legacyRuntime: true });
   const dialog = await setup(page);
-  await expect(dialog.getByRole("radio", { name: "Auto", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("radio", { name: "Auto", exact: true })).toBeEnabled();
+  if (mode === "auto") await dialog.getByRole("radio", { name: "Auto", exact: true }).check();
   await dialog.getByRole("button", { name: "Save and start Mastermind", exact: true }).click();
-  Object.assign(fixture.mastermind, { status: "blocked", stage: "Mastermind needs a runtime upgrade", error: "The running runtime does not support Mastermind. Existing sessions have been preserved.", updatedAt: new Date().toISOString() });
-  await expect(region(page)).toContainText("Mastermind needs a runtime upgrade");
-  await expect(region(page)).toContainText("Existing sessions have been preserved");
+  const session = fixture.attachMastermind("worker");
+  await expect(region(page)).toContainText("Watching");
+  await expect(region(page)).toContainText("Codex");
+  await expect(region(page).getByLabel(`Launch mode: ${mode === "auto" ? "Auto · full access" : "Manual"}`, { exact: true })).toBeVisible();
+  await expect(region(page)).toContainText("Your other sessions stay running");
+  if (mode === "manual") await expect(region(page)).toContainText("approval cards are unavailable for this session");
+  expect(session.harness).toBe("shell");
+  expect(session.agentMode).toBeUndefined();
+  expect(session.mastermindId).toBeUndefined();
   expect(fixture.mutations.map((item) => item.path)).toEqual(["/api/mastermind/config"]);
-  expect(fixture.sessions.dev).toEqual([]);
+  expect(fixture.mutations[0].body).toEqual({ revision: 0, ...config, agentMode: mode });
+  await page.reload();
+  await expect(region(page)).toContainText("Watching");
+  expect(fixture.sessions.dev).toEqual([session]);
+  expect(fixture.mutations).toHaveLength(1);
+});
+
+test("worker terminal requires exact runtime identity and controller confirmation", async ({ page }) => {
+  const fixture = await mockFleet(page, fixtureOptions());
+  Object.assign(fixture.mastermind, { revision: 1, enabled: true, config });
+  const session = fixture.attachMastermind("worker");
+  // Older JSON encoders can represent absent worker-only metadata differently.
+  // Empty strings and omitted fields both mean no provider identity; nonempty
+  // values must still fail the exact worker check below.
+  Object.assign(fixture.mastermind.session!, { agentMode: "", mastermindId: "" });
+  fixture.sessions.dev[0] = { ...session, cwd: "/different/folder" };
+  await page.goto("/");
+  await expect(region(page)).toContainText("does not match a current session");
   expect(fixture.attachments).toEqual([]);
+  fixture.sessions.dev[0] = { ...session, createdAt: "2026-10-15T09:00:00Z" };
+  await expect(region(page)).toContainText("Session unverified");
+  expect(fixture.attachments).toEqual([]);
+  fixture.sessions.dev[0] = { ...session, agentMode: "auto" };
+  await page.reload();
+  await expect(region(page)).toContainText("Session unverified");
+  expect(fixture.attachments).toEqual([]);
+  fixture.sessions.dev[0] = structuredClone(session);
+  Object.assign(fixture.mastermind, { status: "uncertain", blocker: "identity", updatedAt: new Date().toISOString() });
+  await page.reload();
+  await expect(region(page)).toContainText("Waiting for the controller to verify");
+  expect(fixture.attachments).toEqual([]);
+  Object.assign(fixture.mastermind, { status: "running", blocker: undefined, updatedAt: new Date().toISOString() });
+  await expect(region(page)).toContainText("Watching");
+  expect(fixture.attachments).toHaveLength(1);
+  expect(fixture.mutations).toEqual([]);
+});
+
+test("blocked prerequisites offer a setup check and specific actions, never a dead-end Start", async ({ page }) => {
+  const state: MastermindState = { ...configured(), session: undefined, status: "blocked", blocker: "harness", stage: "Agent setup needs attention" };
+  const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
+  await page.goto("/");
+  await expect(region(page).getByRole("button", { name: "Start Mastermind", exact: true })).toHaveCount(0);
+  await expect(region(page).getByRole("button", { name: "Set up Codex", exact: true })).toBeVisible();
+  await region(page).getByRole("button", { name: "Check setup", exact: true }).click();
+  expect(fixture.mutations).toEqual([{ method: "POST", path: "/api/mastermind/start", body: { revision: 3 }, csrf: "fixture-csrf" }]);
+  expect(state.revision).toBe(3);
+  expect(fixture.sessions.dev).toEqual([]);
+  Object.assign(state, { blocker: "folder", stage: "Choose an existing folder", updatedAt: new Date().toISOString() });
+  await region(page).getByRole("button", { name: "Choose a working folder", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Mastermind settings", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  Object.assign(state, { blocker: "identity", status: "uncertain", updatedAt: new Date().toISOString() });
+  await expect(region(page).getByRole("button", { name: "Check setup", exact: true })).toHaveCount(0);
+  await expect(region(page).getByRole("button", { name: "Retry start", exact: true })).toHaveCount(0);
+  expect(fixture.mutations).toHaveLength(1);
+});
+
+test("only a definitively rejected launch offers Retry start", async ({ page }) => {
+  const state: MastermindState = { ...configured(), session: undefined, status: "blocked", blocker: "launch", stage: "The launch was rejected before an agent started" };
+  const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
+  await page.goto("/");
+  await expect(region(page).getByRole("button", { name: "Start Mastermind", exact: true })).toHaveCount(0);
+  await region(page).getByRole("button", { name: "Retry start", exact: true }).click();
+  expect(fixture.mutations.map((item) => item.path)).toEqual(["/api/mastermind/start"]);
+  Object.assign(state, { status: "uncertain", updatedAt: new Date().toISOString() });
+  await expect(region(page).getByRole("button", { name: "Retry start", exact: true })).toHaveCount(0);
+});
+
+test("setup requires verified sign-in and points to the selected machine's agent tools", async ({ page }) => {
+  const fixture = await mockFleet(page, fixtureOptions());
+  await page.route("**/api/hosts/dev/runtime/harnesses", (route) => route.fulfill({ json: [{ id: "codex", name: "Codex", installed: true, authenticated: false }] }));
+  const dialog = await setup(page);
+  await expect(dialog).toContainText("Codex needs sign-in");
+  await expect(dialog.getByRole("button", { name: "Save and start Mastermind", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Sign in to Codex", exact: true }).click();
+  await expect(page).toHaveURL(/#host\/dev$/);
+  await expect(page.getByRole("heading", { name: "Development", exact: true })).toBeVisible();
+  expect(fixture.mutations).toEqual([]);
 });
 
 test("settings replace the coordinator without deleting old output; pause and resume keep the same session", async ({ page }) => {
@@ -177,7 +260,7 @@ test("offline and mismatched session identity cannot acquire the coordinator ter
 
 test("Mastermind state advances within the same RFC3339 fractional second", async ({ page }) => {
   const state = configured();
-  state.status = "blocked"; state.session = undefined; state.stage = "Previous blocked state"; state.updatedAt = "2026-10-15T08:00:00.9Z";
+  state.status = "missing"; state.session = undefined; state.stage = "Previous missing state"; state.updatedAt = "2026-10-15T08:00:00.9Z";
   const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
   // A mutation result is retained while the next fleet read is already in flight.
   await page.route("**/api/mastermind/start", async (route) => {

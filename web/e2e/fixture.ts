@@ -52,10 +52,11 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       if (path.endsWith("/config")) {
         const config = { hostId: body.hostId, harness: body.harness, agentMode: body.agentMode, cwd: body.cwd };
         if (mastermind.enabled && JSON.stringify(mastermind.config) === JSON.stringify(config)) return json(mastermind, 202);
-        Object.assign(mastermind, { revision: mastermind.revision + 1, config, enabled: true, status: "starting", stage: "Starting your coordinator", session: undefined, updatedAt: new Date().toISOString() });
+        Object.assign(mastermind, { revision: mastermind.revision + 1, config, enabled: true, status: "starting", stage: "Starting your coordinator", session: undefined, execution: undefined, blocker: undefined, updatedAt: new Date().toISOString() });
       } else if (path.endsWith("/disable")) Object.assign(mastermind, { revision: mastermind.revision + 1, enabled: false, status: "disabled", stage: "Mastermind is paused; its session is preserved", updatedAt: new Date().toISOString() });
       else if (path.endsWith("/start")) {
         if (mastermind.status === "uncertain") return json({ error: "The previous startup outcome is unknown." }, 409);
+        if (mastermind.enabled && mastermind.status === "blocked" && ["runtime", "harness", "folder", "worker"].includes(mastermind.blocker ?? "")) return json(mastermind);
         Object.assign(mastermind, { revision: mastermind.revision + 1, enabled: true, status: mastermind.session?.status === "running" ? "running" : "starting", stage: "Checking your coordinator", updatedAt: new Date().toISOString() });
       }
       return json(mastermind, path.endsWith("/config") ? 202 : 200);
@@ -182,11 +183,11 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
   });
   return {
     hosts, sessions, maintenanceJobs, mastermind, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
-    attachMastermind: () => {
+    attachMastermind: (execution: "native" | "worker" = "native") => {
       const config = mastermind.config!;
-      const session: Session = { id: `mastermind-session-${mastermind.revision}`, title: "Mastermind", workspace: "Relay", cwd: config.cwd, harness: config.harness, agentMode: config.agentMode, mastermindId: "0123456789abcdef0123456789abcdef", status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      const session: Session = { id: `mastermind-session-${mastermind.revision}`, title: "Mastermind", workspace: "Relay", cwd: config.cwd, harness: execution === "worker" ? "shell" : config.harness, ...(execution === "native" ? { agentMode: config.agentMode, mastermindId: "0123456789abcdef0123456789abcdef" } : {}), status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       sessions[config.hostId] = [...(sessions[config.hostId] ?? []), session];
-      Object.assign(mastermind, { session: structuredClone(session), status: "running", stage: "Mastermind connected", updatedAt: new Date().toISOString() });
+      Object.assign(mastermind, { session: structuredClone(session), execution, blocker: undefined, status: "running", stage: "Mastermind connected", updatedAt: new Date().toISOString() });
       return session;
     },
     startMaintenanceJob: (id: string) => {

@@ -138,6 +138,9 @@ test("real binary: shell, exclusive viewer, controller restart and finished-sess
     client = restarted.process;
     frames = "";
     await page.goto(restarted.url);
+    // The authentication document performs a same-origin handoff. Wait for it
+    // to finish before restoring a route; navigation must not race that handoff.
+    await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
     await page.goto(`${new URL(restarted.url).origin}/${route}`);
     await expect(page.getByRole("heading", { name: "Browser smoke", exact: true })).toBeVisible();
     await expect(page.getByText("Running", { exact: true })).toBeVisible();

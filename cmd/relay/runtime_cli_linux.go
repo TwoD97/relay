@@ -24,6 +24,9 @@ import (
 var runtimeVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}$`)
 
 func runtimeCommand(command string, args []string) error {
+	if command == "mastermind-worker" {
+		return mastermindWorkerCommand(args)
+	}
 	if command == "harness-maintain" {
 		return maintainHarnessCommand(args)
 	}

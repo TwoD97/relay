@@ -65,9 +65,10 @@ func (s *Server) configureMastermind(w http.ResponseWriter, r *http.Request) {
 		cfg := request.MastermindConfig
 		next = mastermindRecord{Format: 1, MastermindState: MastermindState{Revision: next.Revision, Enabled: true, Config: &cfg}, Phase: "queued", HostTarget: host.Target, HostPort: host.Port, HostCreatedAt: host.CreatedAt}
 	} else if next.Phase == "rejected" {
-		next.Phase, next.Token, next.CanonicalCwd = "queued", "", ""
+		resetMastermindAttempt(&next)
 	}
 	next.Status, next.Stage, next.Error = "waiting", "Waiting for the Mastermind machine and harness", ""
+	next.Blocker = ""
 	if err := store.saveLocked(next); err != nil {
 		writeError(w, 500, "Could not save Mastermind settings; no new start request was dispatched")
 		return
@@ -100,24 +101,32 @@ func (s *Server) changeMastermind(w http.ResponseWriter, r *http.Request, disabl
 		writeError(w, 409, store.err)
 		return
 	}
-	if !disable && current.Enabled && current.Phase == "creating" {
+	if !disable && current.Enabled && mastermindPendingPhase(current.Phase) {
 		writeError(w, 409, "The previous Mastermind start is unconfirmed. Inspect this machine's sessions; the request will not be repeated.")
 		return
 	}
 	if (!disable && current.Enabled && (current.Phase == "queued" || (current.Phase == "attached" && current.Status != "exited" && current.Status != "interrupted" && current.Status != "missing"))) || (disable && !current.Enabled) {
-		writeJSON(w, 200, cloneMastermind(current).MastermindState)
+		if !disable && current.Phase == "queued" {
+			// A failed compatibility probe must not upload the release every poll.
+			// This explicit setup check retries preparation, not an unknown launch.
+			store.record.Status, store.record.Stage, store.record.Error, store.record.Blocker = "waiting", "Checking Mastermind setup", "", ""
+			store.record.UpdatedAt = time.Now().UTC()
+			s.wakeMastermind()
+		}
+		writeJSON(w, 200, cloneMastermind(store.record).MastermindState)
 		return
 	}
 	next := cloneMastermind(current)
 	next.Revision++
 	next.Enabled = !disable
+	next.Blocker = ""
 	if disable {
 		next.Status, next.Stage, next.Error = "disabled", "Mastermind is disabled; its session is preserved", ""
 	} else {
 		// Re-enabling a running or unverified session observes it first. A new
 		// agent is only allowed after an explicit start of a confirmed end.
 		if current.Phase == "rejected" || (current.Phase == "attached" && (current.Status == "exited" || current.Status == "interrupted" || current.Status == "missing")) {
-			next.Phase, next.Token, next.CanonicalCwd, next.Session = "queued", "", "", nil
+			resetMastermindAttempt(&next)
 		}
 		next.Status, next.Stage, next.Error = "waiting", "Waiting for the Mastermind machine and harness", ""
 	}
@@ -127,6 +136,11 @@ func (s *Server) changeMastermind(w http.ResponseWriter, r *http.Request, disabl
 	}
 	writeJSON(w, 202, cloneMastermind(store.record).MastermindState)
 	s.wakeMastermind()
+}
+
+func resetMastermindAttempt(rec *mastermindRecord) {
+	rec.Phase, rec.Token, rec.CanonicalCwd, rec.Session = "queued", "", "", nil
+	rec.Execution, rec.WorkerPath, rec.WorkerStateDir, rec.Blocker = "", "", "", ""
 }
 
 func (s *Server) startMastermind(w http.ResponseWriter, r *http.Request) {
@@ -188,19 +202,26 @@ func (s *Server) mastermindClient(rec mastermindRecord) (*http.Client, *transpor
 }
 
 func mastermindMatches(rec mastermindRecord, session MastermindSession) bool {
-	return rec.Config != nil && validMastermindID(session.ID) && !session.CreatedAt.IsZero() &&
-		session.MastermindID == rec.Token && session.Harness == rec.Config.Harness && session.AgentMode == rec.Config.AgentMode && session.Cwd == rec.CanonicalCwd && session.Purpose == "" &&
+	if rec.Config == nil {
+		return false
+	}
+	providerMatches := session.MastermindID == rec.Token && session.Harness == rec.Config.Harness && session.AgentMode == rec.Config.AgentMode
+	if rec.Execution == "worker" {
+		providerMatches = session.Harness == "shell" && session.MastermindID == "" && session.AgentMode == ""
+	}
+	return validMastermindID(session.ID) && !session.CreatedAt.IsZero() && providerMatches &&
+		session.Cwd == rec.CanonicalCwd && session.Purpose == "" &&
 		(session.Status == "running" || session.Status == "exited" || session.Status == "interrupted") &&
 		(rec.Session == nil || (rec.Session.ID == session.ID && rec.Session.CreatedAt.Equal(session.CreatedAt)))
 }
 
 func (s *Server) reconcileMastermind(rec mastermindRecord) {
-	if rec.Phase == "rejected" {
+	if rec.Phase == "rejected" || (rec.Phase == "queued" && rec.Status == "blocked" && rec.Blocker == "worker") {
 		return
 	}
 	client, connection, ready, err := s.mastermindClient(rec)
 	if err != nil {
-		s.mastermind.notice(rec.Revision, "blocked", "Mastermind machine needs attention", err.Error())
+		s.mastermind.notice(rec.Revision, "blocked", "Mastermind machine needs attention", err.Error(), "host")
 		return
 	}
 	if !ready {
@@ -209,6 +230,10 @@ func (s *Server) reconcileMastermind(rec mastermindRecord) {
 	}
 	if rec.Phase == "queued" {
 		s.createMastermind(rec, client, connection)
+		return
+	}
+	if rec.Execution == "worker" && rec.Session == nil {
+		s.mastermind.notice(rec.Revision, "uncertain", "The Mastermind setup session could not be confirmed", "No create or input request will be repeated. Inspect this machine's sessions before changing configuration.", "identity")
 		return
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 8*time.Second)
@@ -226,22 +251,33 @@ func (s *Server) reconcileMastermind(rec mastermindRecord) {
 	var found *MastermindSession
 	for i := range sessions {
 		item := &sessions[i]
-		if item.MastermindID != rec.Token && (rec.Session == nil || item.ID != rec.Session.ID) {
+		if (rec.Execution == "worker" || item.MastermindID != rec.Token) && (rec.Session == nil || item.ID != rec.Session.ID) {
 			continue
 		}
 		if found != nil || !mastermindMatches(rec, *item) {
-			s.mastermind.notice(rec.Revision, "uncertain", "Mastermind session identity does not match", "The existing sessions were preserved. No start request will be repeated.")
+			s.mastermind.notice(rec.Revision, "uncertain", "Mastermind session identity does not match", "The existing sessions were preserved. No start request will be repeated.", "identity")
 			return
 		}
 		found = item
 	}
 	if found == nil {
-		if rec.Phase == "creating" {
+		if mastermindPendingPhase(rec.Phase) {
 			s.mastermind.notice(rec.Revision, "uncertain", "The previous Mastermind start could not be confirmed", "No request was repeated. Inspect this machine's sessions before changing the configuration.")
 		} else {
 			s.mastermind.notice(rec.Revision, "missing", "The saved Mastermind session is no longer available", "Start a new Mastermind when ready. Nothing was replayed.")
 		}
 		return
+	}
+	if rec.Execution == "worker" {
+		data, err := readMastermindWorkerStatus(ctx, rec, connection)
+		if err != nil {
+			s.mastermind.notice(rec.Revision, "uncertain", "Waiting to verify the Mastermind worker", "The worker receipt could not be read. Nothing will be replayed.", "identity")
+			return
+		}
+		if err := verifyMastermindWorkerReceipt(rec, data); err != nil {
+			s.mastermind.notice(rec.Revision, "uncertain", "Mastermind worker launch needs verification", err.Error(), "identity")
+			return
+		}
 	}
 	s.attachMastermind(rec, *found)
 }
@@ -255,6 +291,7 @@ func (s *Server) attachMastermind(rec mastermindRecord, session MastermindSessio
 	s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
 		next.Phase, next.Session = "attached", &session
 		next.Status, next.Stage, next.Error = session.Status, stage, ""
+		next.Blocker = ""
 	})
 }
 
@@ -267,10 +304,10 @@ func sameMastermindSession(a, b MastermindSession) bool {
 }
 
 func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, connection *transport.Connection) {
-	ctx, cancel := context.WithTimeout(s.ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
 	defer cancel()
-	blocked := func(message string) {
-		s.mastermind.notice(rec.Revision, "blocked", "Mastermind setup needs attention", message)
+	blocked := func(reason, message string) {
+		s.mastermind.notice(rec.Revision, "blocked", "Mastermind setup needs attention", message, reason)
 	}
 	data, err := runtimeJSON(ctx, client, "GET", "/api/health", nil)
 	if err != nil {
@@ -283,13 +320,13 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 			MastermindV1 bool `json:"mastermindV1"`
 		} `json:"capabilities"`
 	}
-	if json.Unmarshal(data, &health) != nil || !health.Capabilities.MastermindV1 {
-		blocked("This runtime does not support Mastermind yet. Update it and restart the runtime after its active sessions finish; current sessions will not be restarted automatically.")
+	if json.Unmarshal(data, &health) != nil {
+		blocked("runtime", "Could not read the runtime capabilities. Check the connection; no session was started.")
 		return
 	}
 	data, err = runtimeJSON(ctx, client, "GET", "/api/harnesses", nil)
 	if err != nil {
-		blocked("Could not verify the selected harness. Open the machine to check its installation and sign-in.")
+		blocked("harness", "Could not verify the selected harness. Open the machine to check its installation and sign-in.")
 		return
 	}
 	var harnesses []struct {
@@ -298,7 +335,7 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		Authenticated *bool  `json:"authenticated"`
 	}
 	if json.Unmarshal(data, &harnesses) != nil {
-		blocked("The runtime returned invalid harness status; no agent was started.")
+		blocked("harness", "The runtime returned invalid harness status; no agent was started.")
 		return
 	}
 	ready := false
@@ -308,12 +345,12 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		}
 	}
 	if !ready {
-		blocked("Install and sign in to the selected harness on this machine. Mastermind will start after setup is ready.")
+		blocked("harness", "Install and sign in to the selected harness on this machine. Mastermind will start after setup is ready.")
 		return
 	}
 	query := transport.DirectoryQuery{Path: rec.Config.Cwd}
 	if (query.Path == "~" || strings.HasPrefix(query.Path, "~/")) && (!strings.HasPrefix(health.Home, "/") || (transport.DirectoryQuery{Path: health.Home}).Validate() != nil) {
-		blocked("The runtime did not report a valid home folder. Choose an absolute working folder.")
+		blocked("folder", "The runtime did not report a valid home folder. Choose an absolute working folder.")
 		return
 	}
 	if query.Path == "~" {
@@ -330,8 +367,17 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		err = errors.New("SSH connection is unavailable")
 	}
 	if err != nil || !strings.HasPrefix(directory.Path, "/") || (transport.DirectoryQuery{Path: directory.Path}).Validate() != nil {
-		blocked("Could not resolve the working folder. Open Mastermind settings and choose an existing folder.")
+		blocked("folder", "Could not resolve the working folder. Open Mastermind settings and choose an existing folder.")
 		return
+	}
+	execution, workerPath, workerStateDir := "native", "", ""
+	if !health.Capabilities.MastermindV1 {
+		execution = "worker"
+		workerPath, workerStateDir, err = s.prepareMastermindWorker(ctx, rec, connection)
+		if err != nil {
+			blocked("worker", err.Error())
+			return
+		}
 	}
 	// Random ownership metadata is persisted before the non-idempotent request.
 	// It is never a provider token or a claim based on a session title.
@@ -339,6 +385,7 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 	if ctx.Err() != nil || !s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
 		next.Phase, next.Token, next.CanonicalCwd = "creating", token, directory.Path
 		next.Status, next.Stage, next.Error = "starting", "Starting Mastermind once", ""
+		next.Execution, next.WorkerPath, next.WorkerStateDir, next.Blocker = execution, workerPath, workerStateDir, ""
 	}) {
 		return
 	}
@@ -346,15 +393,22 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 	if rec.Token != token || !rec.Enabled {
 		return
 	}
-	data, err = runtimeJSON(ctx, client, "POST", "/api/sessions", map[string]any{
+	body := map[string]any{
 		"title": "Mastermind", "workspace": "Mastermind", "cwd": directory.Path,
-		"harness": rec.Config.Harness, "agentMode": rec.Config.AgentMode, "mastermindId": token,
-	})
+		"harness": rec.Config.Harness,
+	}
+	if execution == "worker" {
+		body["harness"] = "shell"
+	} else {
+		body["agentMode"], body["mastermindId"] = rec.Config.AgentMode, token
+	}
+	data, err = runtimeJSON(ctx, client, "POST", "/api/sessions", body)
 	if err != nil {
 		var rejection *runtimeHTTPError
 		if errors.As(err, &rejection) && (rejection.Status == 400 || rejection.Status == 422) {
 			s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
 				next.Phase, next.Status, next.Stage, next.Error = "rejected", "blocked", "Mastermind startup was rejected", rejection.Error()
+				next.Blocker = "launch"
 			})
 			return
 		}
@@ -368,5 +422,36 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		s.mastermind.notice(rec.Revision, "uncertain", "Mastermind startup returned an invalid identity", "No request was repeated. Inspect the machine's sessions.")
 		return
 	}
+	if execution == "worker" {
+		s.dispatchMastermindWorker(ctx, rec, session, client)
+		return
+	}
 	s.attachMastermind(rec, session)
+}
+
+func (s *Server) dispatchMastermindWorker(ctx context.Context, rec mastermindRecord, session MastermindSession, client *http.Client) {
+	// A returned shell identity must be durable before any input can execute.
+	if !s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
+		next.Phase, next.Session = "worker-prepared", &session
+		next.Stage = "Preparing Mastermind in its persistent terminal"
+	}) {
+		return
+	}
+	if ctx.Err() != nil || !s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
+		next.Phase, next.Stage = "worker-dispatched", "Starting the compatible Mastermind worker once"
+	}) {
+		return
+	}
+	dispatched := s.mastermind.current()
+	if !dispatched.Enabled || dispatched.Revision != rec.Revision || dispatched.Token != rec.Token || dispatched.Session == nil || dispatched.Session.ID != session.ID || !dispatched.Session.CreatedAt.Equal(session.CreatedAt) {
+		return
+	}
+	command := "exec " + mastermindShellArguments(append([]string{dispatched.WorkerPath}, mastermindWorkerArgs(dispatched, "run")...)) + "\r"
+	err := startMaintenanceInput(ctx, client, session.ID, command)
+	message := "Checking the durable worker receipt before connecting. No command will be replayed."
+	if err != nil {
+		message = "The worker input outcome is unconfirmed. Its durable receipt will be checked; no command will be replayed."
+	}
+	s.mastermind.notice(rec.Revision, "uncertain", "Verifying the Mastermind worker launch", message, "identity")
+	s.wakeMastermind()
 }

@@ -11,15 +11,25 @@ excluded from the repository.
 ./scripts/check.sh
 ./scripts/build.sh
 ./scripts/build-windows-controller.sh
+./scripts/build-legacy-test-runtime.sh
 go test -race -tags relay_ssh_native ./internal/transport -count=1 -timeout 1m
 RELAY_SSH_INTEGRATION=1 RELAY_SSH_HARNESSES=1 go test -race ./internal/transport -run TestRealSSH -count=1 -v -timeout 10m
-CI=1 RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts
+CI=1 RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" RELAY_LEGACY_BINARY="$PWD/dist/relay-legacy-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts
 ```
 
 The SSH gate uses Docker containers and can download the current official
 provider binaries. It does not sign into provider accounts or run paid model
 requests. Multi-host orchestration uses deterministic shell workers to test host
 isolation, terminal control, recovery, and preservation across disconnects.
+
+The legacy-fixture builder requires Go 1.27.1 and public commit
+`fd7999b3bbcf20c8d852bf7461a58e211d04a376` in the local Git object database. For a
+shallow checkout, fetch that exact commit with
+`git fetch --no-tags --depth=1 origin fd7999b3bbcf20c8d852bf7461a58e211d04a376`.
+It builds in a private temporary directory and requires the original shipped
+SHA-256 `f3483628e68655cfae23beaf8f0cfd752ee11035708c8564563d1bf85bbbf31f`.
+CI runs this gate explicitly; without the binary variables, live cases are
+reported as skipped, not passed.
 
 [Desktop validation](../desktop/README.md) covers native Rust checks, Linux
 WebKit integration, Windows installation/staging, and interactive WebView2
@@ -42,8 +52,8 @@ checks retain Reload, Reconnect, and Quit without an Open in Browser action.
 Portable packaging tests verify the complete resource allowlist, checksums,
 Windows GUI executable, license notices, and exclusion of account state. They
 reject incomplete or modified bundles, symlinks, and Windows junctions. The
-Windows `-LaunchOnly` smoke test opens an extracted ZIP using its default resource
-paths and isolated state/profile, then checks ordinary native startup without
+Windows `-LaunchOnly` smoke test opens extracted application files from the ZIP
+or NSIS installer using default resource paths and isolated state/profile, then checks ordinary native startup without
 WSL, console windows, or debug flags. It does not replace the full interactive
 terminal, window focus, or optional Windows clipboard gate.
 
@@ -67,7 +77,7 @@ theme preference is changed.
 Controller regressions cover a single durable startup, configuration revisions,
 parallel saves, delayed responses after reconfiguration, lost creation replies,
 exact host/session ownership, disabled recovery, explicit restart after exit,
-unsupported runtimes, missing sign-in, persistence failure, and corrupt optional
+older runtime compatibility, missing sign-in, persistence failure, and corrupt optional
 state without losing the rest of the fleet. Remote HTTP fixtures exercise
 platform-independent recovery; Linux-only creation fixtures use real temporary
 directories rather than pretending Windows has a local Linux runtime.
@@ -83,6 +93,15 @@ and deterministic provider executables. It checks a real coordinator PTY,
 reload/second-viewer behavior, controller restart, and a provider switch that
 preserves the previous process. No provider login or inference occurs, so these
 checks validate orchestration mechanics rather than model planning quality.
+
+The compatibility cases additionally use a checksum-verified previous runtime
+(`0.1.0-dev.50e9fc609217`). They exercise Claude Code and Codex in both modes,
+unsupported-flag preflight, explicit setup recovery, and exact worker attachment
+after a controller restart. The old daemon's process and an ordinary terminal
+remain alive throughout, retaining their original identity, history, and input.
+Worker regressions cover lost create/input replies, storage failures before and
+after dispatch, every incomplete startup phase, duplicate claims, invalid
+receipts, and stale configuration. These tests never use personal host state.
 
 ## Activity and clipboard coverage
 
@@ -108,6 +127,54 @@ round trips, and rejection of delayed paste after focus/control changes. The
 Linux native gate uses a private Xvfb clipboard. Windows native clipboard checks
 require the optional `-Clipboard` gate documented in the desktop README; ordinary
 Windows installer checks do not exercise the user's clipboard.
+
+## Live-runtime compatibility and Windows installer — 2026-10-15
+
+Desktop version: `0.2.0`. Runtime bundle: `0.2.0-dev.52b7d81b0fc7`.
+
+- All 284 distinct interface cases passed across project and targeted runs:
+  272 fixture cases and 12 real-binary cases, with no remaining failures or
+  skips. The combined run received SIGTERM after 218 passing cases; all 142
+  desktop cases had completed. A separate phone run exposed an authentication
+  redirect race in its test navigation. After adding an explicit authenticated
+  view readiness check, all eight affected live tests passed in 34.1 seconds.
+  Product code and packaged binaries did not change during that correction.
+- The actual previous-runtime cases passed on the final bundle in both desktop
+  (28.3 seconds) and narrow-window (24.2 seconds) views. All four provider/mode
+  combinations attached through verified receipts while the old daemon and an
+  ordinary terminal preserved their identities, history, and input. Controller
+  restart reused the same worker without launching another provider.
+- Full Go race tests passed 236 top-level cases; seven opt-in cases were skipped
+  in that default run. Go vet and formatting passed. Fifteen native SSH cases
+  and both disposable SSH integration gates passed separately, including
+  two-host control and preservation through controller crash/restart. Clean
+  harness installs verified Codex 0.162.1 and Claude Code 2.1.300 without login
+  or inference.
+- Native Rust formatting, Clippy, and tests passed on Linux (15) and Windows
+  (14). Seven Windows controller Mastermind cases passed; 13 Linux-only
+  creation cases were intentionally skipped on Windows.
+- The NSIS installer was built and extracted. Its exact 17 application files
+  and six installer plugins passed allowlist verification; all three runtime
+  binaries, version, documentation, and notices matched the prepared bundle.
+  The native executable is an AMD64 GUI application with product version 0.2.0.
+- The extracted installer payload passed isolated Windows `-LaunchOnly` in
+  11.03 seconds using its default packaged resources: native window, WebView2,
+  controller authentication, rejected token replay, synchronized app/frame/menu
+  appearance, saved Light preference after close/reopen, rejected invalid or
+  privileged IPC, and normal startup without WSL, debug flags, or console
+  windows. This gate did not exercise physical keyboard or clipboard input.
+- Linux installer regressions passed all ten cases; portable archive regressions
+  passed eight cases with the Windows-only junction case skipped. The new
+  guarded Windows state-preservation script passed PowerShell parsing and is
+  wired into fresh-account CI as a same-build reinstall check.
+
+Installer SHA-256:
+`d6d8c98a60b3caff378d6dc32fcdf77579ebdf3d05a9f69e612aed8a94dd8e8c`.
+The installer remains unsigned. Installation and upgrade of a personal Windows
+account were not exercised locally; the fresh-account installer/reinstall CI
+gate and optional prior-version upgrade gate are distinct from extracted-payload
+launch checks. No personal host configuration, provider account, or live remote
+session was used in these tests.
 
 ## Appearance and Mastermind — 2026-10-15
 
@@ -155,10 +222,9 @@ Completed local checks:
   was extracted, checked against its complete 22-file allowlist and manifest,
   and launched using its default packaged resources.
 
-Existing remote runtimes are never restarted by these checks or the desktop
-update. An older running runtime without `mastermindV1` must be upgraded after
-its active sessions finish before Mastermind setup can succeed. Previous
-sessions remain available in the meantime.
+That release did not support starting Mastermind on an older running runtime
+without `mastermindV1`. The compatibility-worker checks above cover the fix;
+existing remote runtimes are still never restarted by a desktop update.
 
 ## Fleet names and launch modes — 2026-10-12
 

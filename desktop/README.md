@@ -5,17 +5,18 @@ Windows x64 uses WebView2 and a native Windows controller and SSH
 client; WSL is not required. Linux amd64 and arm64 use WebKitGTK. Linux packages
 also work inside WSLg.
 
-For portable Windows use, extract `relay-desktop-windows-amd64-portable.zip` and
-open `Relay/relay-desktop.exe`. Keep the whole folder together. No Relay installer,
-administrator access, Microsoft account, or Relay account is required. WebView2
-must be available; Windows 11 includes it and most Windows 10 computers have it.
-The ZIP's `README.txt` links to Microsoft's runtime download when it is missing.
-Settings remain in the private Windows account directories, so the ZIP is an
-installation-free application, not a roaming archive of credentials or hosts.
-
-Alternatively, install `relay-desktop-windows-amd64-setup.exe` and open **Relay**
+On Windows, install `relay-desktop-windows-amd64-setup.exe` and open **Relay**
 from the Start menu. The installer operates for the current user, provides an
-uninstaller, and installs WebView2 if it is missing. Coding harnesses
+uninstaller, and installs WebView2 if it is missing.
+
+The portable ZIP offers the same application features. Extract
+`relay-desktop-windows-amd64-portable.zip` and open `Relay/relay-desktop.exe`.
+Keep the whole folder together. No Relay installer, administrator access,
+Microsoft account, or Relay account is required. WebView2 must already be
+available; the ZIP's `README.txt` links to Microsoft's runtime download when it
+is missing. Settings remain in the private Windows account directories, so the
+ZIP is an installation-free application, not a roaming archive of credentials
+or hosts. Coding harnesses
 and terminal sessions run on the connected Linux hosts; local Windows PTYs are
 not implemented. Windows SSH supports direct connections, aliases, private keys,
 the Windows OpenSSH agent, passphrases, and passwords. ProxyJump and ProxyCommand
@@ -25,6 +26,37 @@ The window starts or reconnects to a detached local Relay controller. Closing th
 window or choosing **Quit Relay** leaves the controller, SSH connections, and
 terminal sessions running. Reopening the app reconnects to the matching controller.
 Starting the default desktop app again focuses its existing window.
+
+## Windows updates and saved data
+
+Close the existing Relay window before installing or opening a different build;
+otherwise, single-instance activation focuses the already running copy. Closing
+the window leaves its controller and remote sessions running. Install over the
+existing installation, then open Relay from the Start menu. The desktop package
+version is `0.2.0`; reinstalling that same version may offer **Add/Reinstall**.
+The bundled runtime has its own build version and the launcher checks it before
+reusing or replacing the local controller.
+
+Installed and portable copies use the same Windows account data:
+
+| Data | Default location |
+| --- | --- |
+| Saved hosts, Mastermind choice, controller state | `%LOCALAPPDATA%\RelayData\relay-client` |
+| Appearance preference | `%APPDATA%\dev.relay.desktop\appearance.json` |
+| Embedded WebView2 profile | `%LOCALAPPDATA%\dev.relay.desktop` |
+| SSH configuration, keys, and trusted hosts | The user's `.ssh` directory, or configured SSH paths |
+
+The installer writes application files under `%LOCALAPPDATA%\Relay`, separately
+from this data. Its optional uninstall **Delete app data** checkbox removes the
+native appearance configuration and WebView2 profile; it does not remove
+`RelayData`, SSH files, or remote sessions. Normal reinstalls preserve these
+settings. Neither packaging format restarts a live remote daemon automatically.
+Mastermind can use a verified compatibility worker on an older runtime while
+existing sessions keep running. Runtime-native features, including approval
+hooks, still require a runtime that supports them; worker permission prompts
+remain in the terminal.
+
+## Appearance and window controls
 
 The **Appearance** selector in the app's top bar defaults to **System** and also
 offers **Light** and **Dark**. It updates the app, terminal ANSI palette, title
@@ -208,6 +240,23 @@ checks copy/paste using its isolated Xvfb clipboard.
 `python scripts/test_portable_package.py -v` checks archive integrity, required
 resources, corruption, private-file exclusion, symbolic links, and Windows
 junctions using disposable files only.
+
+`test_windows_upgrade.ps1` also requires a fresh disposable Windows account. It
+installs a previous package, seeds a fake saved host, Mastermind identity,
+appearance preference, and WebView profile marker, then verifies those bytes
+survive the candidate installer alongside the new payloads and Start menu
+shortcut:
+
+```powershell
+./scripts/test_windows_upgrade.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist -PreviousInstaller C:\fixtures\previous-setup.exe -PreviousBundle C:\fixtures\previous-runtime
+```
+
+Both installers need their `.sha256` sidecars. Without the previous-package
+arguments, the test reports a same-build reinstall, not a version upgrade. It
+refuses an existing installation or account data, never opens the app, and does
+not claim to exercise live session preservation; that is covered separately by
+the controller and native lifecycle gates. Do not run this installer test in a
+personal Windows account or redirect account directories to bypass its guard.
 
 Tauri API references used by this wrapper:
 [window navigation](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html),

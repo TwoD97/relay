@@ -42,8 +42,12 @@ jobs:
         run: go test -race -tags relay_ssh_native ./internal/transport -count=1 -v -timeout 1m 2>&1 | tee .test-artifacts/native-ssh.log
       - run: ./scripts/build.sh
       - run: ./scripts/build-windows-controller.sh
+      - name: Build immutable previous-runtime fixture
+        run: |
+          git fetch --no-tags --depth=1 origin fd7999b3bbcf20c8d852bf7461a58e211d04a376
+          ./scripts/build-legacy-test-runtime.sh 2>&1 | tee .test-artifacts/legacy-runtime-build.log
       - name: Real binary browser checks
-        run: RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts 2>&1 | tee .test-artifacts/live-browser.log
+        run: RELAY_TEST_RUN=live RELAY_LIVE_BINARY="$PWD/dist/relay-linux-amd64" RELAY_LEGACY_BINARY="$PWD/dist/relay-legacy-linux-amd64" npm --prefix web test -- e2e/live.spec.ts e2e/mastermind-live.spec.ts 2>&1 | tee .test-artifacts/live-browser.log
       - name: Real two-host orchestration, recovery and harness bootstrap
         env:
           RELAY_SSH_INTEGRATION: '1'
@@ -185,8 +189,8 @@ jobs:
       - name: Build and verify the native Windows installer
         run: |
           ./scripts/build-desktop-windows.ps1 -SourceRoot $PWD.Path -StageRoot (Join-Path $env:RUNNER_TEMP 'relay-desktop-build') -NoticesPath (Join-Path $PWD.Path 'desktop/resources/RUST_THIRD_PARTY_NOTICES.windows.txt') 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-build.log')
-      - name: Install and verify Windows package resources
-        run: ./scripts/test_windows_install.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-installed.log')
+      - name: Verify fresh Windows install and state-preserving reinstall
+        run: ./scripts/test_windows_upgrade.ps1 -Installer dist/relay-desktop-windows-amd64-setup.exe -Bundle dist 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/windows-installed.log')
       - name: Package and verify portable Windows desktop
         run: |
           python scripts/test_portable_package.py -v

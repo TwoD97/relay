@@ -14,12 +14,18 @@ embedded WebView; there is no separate browser client or Relay account to sign
 into. Its private local controller starts and authenticates the window
 automatically. Provider accounts and SSH still use their normal authentication.
 
-On Windows x64, extract the **portable ZIP** to a writable folder and run
-`relay-desktop.exe`. Keep the adjacent resources with the executable. No Relay
-installer, administrator access, or WSL is needed. The Microsoft WebView2 runtime
-must already be available. Alternatively, use the current-user Windows installer
-and open **Relay** from the Start menu. Windows clients manage Linux SSH hosts;
-local Windows terminal sessions are not implemented.
+On Windows x64, run the **Windows installer** and open **Relay** from the Start
+menu. It installs for the current user, supplies an uninstaller, and sets up
+Microsoft WebView2 when needed. No WSL is required. Close an existing Relay
+window before opening the updated app. Saved hosts, Mastermind settings, and
+appearance are shared with the portable version and are kept across upgrades.
+Windows clients manage Linux SSH hosts; local Windows terminal sessions are not
+implemented.
+
+The optional **portable ZIP** has the same application features. Extract it to a
+writable folder and run `relay-desktop.exe`, keeping its adjacent resources
+together. It needs WebView2 already installed and does not provide an installer,
+Start menu entry, or uninstaller.
 
 Portable means installation-free: settings remain private to your Windows user
 under `%LOCALAPPDATA%\RelayData` so existing saved machines are reused. The ZIP
@@ -108,9 +114,15 @@ the agent keeps running on its machine.
 Startup belongs to the controller, so reloading a view or opening another window
 does not create another agent. Relay records an explicit launch identity before
 starting it. If the response is lost, it checks that identity without replaying
-the launch. An unresolved outcome remains visible for inspection. Older runtimes
-must be upgraded before Mastermind can start. Wait for their active sessions to
-finish before activating the new runtime; Relay does not restart them for you.
+the launch. An unresolved outcome remains visible for inspection.
+
+For compatible older runtimes, Relay prepares its current CLI and starts
+Mastermind inside a separate persistent terminal without restarting the daemon
+or its existing sessions. It verifies the provider's supported flags before
+launch and checks a durable receipt before attaching. This compatibility session
+uses terminal permission prompts; approval cards require native Mastermind
+support in the running runtime. If setup needs attention, the overview offers
+the relevant sign-in, folder, runtime, or **Check setup** action.
 
 The terminal is a real PTY. In **Start a session**, choose **Browse** to select an
 existing project folder on the connected host. Navigate Home, parent folders, or
@@ -143,8 +155,9 @@ the connected OS user's permissions and have no agent mode.
 
 The mode badge records how that session was launched; permissions can still be
 changed inside the provider terminal. Existing sessions keep their launch settings.
-Auto requires an updated running Relay runtime and compatible provider CLI; an
-unsupported CLI is rejected before creating a session. Codex receives the Auto
+Ordinary Auto sessions require an updated running Relay runtime; Mastermind can
+also use the compatibility worker described above. Both require a compatible
+provider CLI, and unsupported flags are rejected before creating a session. Codex receives the Auto
 instruction as an initial message and may reply before the first task. Claude
 receives it as additional system context. Existing provider/project instructions
 are preserved. See [launch modes](docs/ACTIVITY.md#agent-launch-modes).

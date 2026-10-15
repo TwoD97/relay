@@ -20,7 +20,7 @@ import (
 	"github.com/TwoD97/relay/web"
 )
 
-var version = "0.1.0-dev"
+var version = "0.2.0-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -65,7 +65,7 @@ func run(args []string) error {
 		return fleetCommand(args)
 	case "project-context":
 		return projectContextCommand(args)
-	case "daemon", "ensure", "bridge", "harness-maintain":
+	case "daemon", "ensure", "bridge", "harness-maintain", "mastermind-worker":
 		return runtimeCommand(command, args)
 	}
 	return fmt.Errorf("unknown command %q; run relay help", command)

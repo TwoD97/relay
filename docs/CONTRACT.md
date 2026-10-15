@@ -75,7 +75,7 @@ not change existing sessions or grant OS/SSH authority. The persisted field
 records launch choice, independently of hook-observed permission state. See
 [ACTIVITY.md](ACTIVITY.md#agent-launch-modes) for the provider contract.
 
-Mastermind startup requires `mastermindV1` and a signed-in provider. Its
+Native Mastermind startup requires `mastermindV1` and a signed-in provider. Its
 `mastermindId` is a 32-character lowercase hexadecimal launch identity, never
 derived from a title. The runtime persists it and adds a fixed coordinator role
 to the CLI instructions without replacing project policy or upgrading Manual
@@ -91,6 +91,31 @@ the overview connects only to a fresh, exact matching session. A disabled
 coordinator releases its viewer without stopping the agent. A corrupt optional
 Mastermind state file disables that feature and preserves the file; other fleet
 functions remain available.
+
+On a compatible protocol-1 runtime without `mastermindV1`, the controller uses
+`execution:"worker"` instead of `"native"`. It verifies the current Relay CLI and
+selected provider's flags, then creates an ordinary shell session using only the
+legacy request fields. It persists that session's exact ID and creation time
+before recording input intent and sending one literal `exec` command. Startup
+phases are `creating`, `worker-prepared`, `worker-dispatched`, then `attached`.
+Recovery in an incomplete phase only observes sessions and receipts; it never
+repeats create or input requests. Lost create responses without an exact returned
+identity remain uncertain, even when a similarly named session exists.
+
+`mastermind-worker probe|run|status` never opens the daemon database. The worker
+verifies its inherited socket/session ID against the owning runtime and claims a
+private, exclusive `<state>/mastermind-workers/<launchId>.json` receipt. It then
+executes the provider in the same PTY and process. Attachment requires the exact
+receipt, folder, session ID, creation time, provider, mode, and launch identity.
+The runtime continues to describe this as a shell; controller state carries the
+verified provider/mode without inventing runtime capabilities. Compatibility
+workers do not install permission hooks; prompts remain in their terminal.
+Neither preparation nor startup restarts the old daemon or an existing session.
+
+An optional Mastermind `blocker` identifies setup or recovery needs (`host`,
+`runtime`, `harness`, `folder`, `worker`, `launch`, `identity`, `storage`). Failed
+worker preparation waits for an explicit setup check rather than repeatedly
+uploading files. A setup check does not authorize replay of uncertain mutations.
 
 Named fleet discovery is an agent CLI capability, independent of runtime HTTP
 support. The controller publishes bounded, private snapshots beside each

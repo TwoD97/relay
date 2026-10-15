@@ -18,7 +18,7 @@ for p in sorted(set(files)):
 print(h.hexdigest()[:12])
 PY
 )
-RELAY_VERSION="${RELAY_VERSION:-0.1.0-dev.$RELAY_SOURCE_HASH}"
+RELAY_VERSION="${RELAY_VERSION:-0.2.0-dev.$RELAY_SOURCE_HASH}"
 if [[ ! "$RELAY_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}$ ]]; then echo 'Invalid RELAY_VERSION' >&2; exit 1; fi
 mkdir -p dist
 for RELAY_ARCH in amd64 arm64; do

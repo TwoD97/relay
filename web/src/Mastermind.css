@@ -12,6 +12,9 @@
 .mastermind-context { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 0 20px 16px; color: var(--text-secondary); font-size: 10px; }
 .mastermind-context > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .mastermind-context .mono { overflow-wrap: anywhere; }
+.mastermind-compatibility { padding: 0 20px 14px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.mastermind-setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 9px; }
+.mastermind-setup-actions > p { flex-basis: 100%; }
 .mastermind-terminal { display: flex; height: clamp(300px, 43vh, 510px); min-height: 0; border-top: 1px solid var(--line); }
 .mastermind-terminal .terminal-shell { width: 100%; }
 .mastermind-empty { display: flex; align-items: center; gap: 18px; padding: 0 20px 20px; }
@@ -40,6 +43,7 @@
   .mastermind-heading > div { flex-basis: calc(100% - 46px); }
   .mastermind-actions { margin-left: 46px; flex-wrap: wrap; }
   .mastermind-context { padding: 0 16px 14px; gap: 7px 12px; }
+  .mastermind-compatibility { padding: 0 16px 14px; }
   .mastermind-empty { padding: 0 16px 17px; align-items: flex-start; flex-direction: column; gap: 13px; }
   .mastermind-empty > .button { width: 100%; }
   .mastermind-terminal { height: 370px; }

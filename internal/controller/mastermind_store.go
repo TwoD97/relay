@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/TwoD97/relay/internal/transport"
 )
@@ -31,8 +33,8 @@ type MastermindSession struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 	Status       string    `json:"status"`
 	Harness      string    `json:"harness"`
-	AgentMode    string    `json:"agentMode"`
-	MastermindID string    `json:"mastermindId"`
+	AgentMode    string    `json:"agentMode,omitempty"`
+	MastermindID string    `json:"mastermindId,omitempty"`
 	Title        string    `json:"title"`
 	Workspace    string    `json:"workspace"`
 	Cwd          string    `json:"cwd"`
@@ -45,6 +47,8 @@ type MastermindState struct {
 	Enabled   bool               `json:"enabled"`
 	Config    *MastermindConfig  `json:"config,omitempty"`
 	Status    string             `json:"status"`
+	Execution string             `json:"execution,omitempty"`
+	Blocker   string             `json:"blocker,omitempty"`
 	Stage     string             `json:"stage"`
 	Error     string             `json:"error,omitempty"`
 	Session   *MastermindSession `json:"session,omitempty"`
@@ -56,12 +60,14 @@ type mastermindRecord struct {
 	MastermindState
 	// queued is the only phase allowed to dispatch one create. creating is
 	// committed before dispatch; all later recovery is read-only by token.
-	Phase         string    `json:"phase"`
-	Token         string    `json:"token,omitempty"`
-	CanonicalCwd  string    `json:"canonicalCwd,omitempty"`
-	HostTarget    string    `json:"hostTarget,omitempty"`
-	HostPort      int       `json:"hostPort,omitempty"`
-	HostCreatedAt time.Time `json:"hostCreatedAt,omitempty"`
+	Phase          string    `json:"phase"`
+	Token          string    `json:"token,omitempty"`
+	CanonicalCwd   string    `json:"canonicalCwd,omitempty"`
+	HostTarget     string    `json:"hostTarget,omitempty"`
+	HostPort       int       `json:"hostPort,omitempty"`
+	HostCreatedAt  time.Time `json:"hostCreatedAt,omitempty"`
+	WorkerPath     string    `json:"workerPath,omitempty"`
+	WorkerStateDir string    `json:"workerStateDir,omitempty"`
 }
 
 type mastermindStore struct {
@@ -74,7 +80,15 @@ type mastermindStore struct {
 
 func unavailableMastermindStore(dir string) *mastermindStore {
 	message := "Mastermind settings could not be read. Preserve or restore mastermind.json before configuring another session. Other Relay features remain available."
-	return &mastermindStore{path: filepath.Join(dir, "mastermind.json"), err: message, loadFailed: true, record: mastermindRecord{Format: 1, MastermindState: MastermindState{Status: "uncertain", Stage: "Mastermind settings need recovery", Error: message, UpdatedAt: time.Now().UTC()}}}
+	return &mastermindStore{path: filepath.Join(dir, "mastermind.json"), err: message, loadFailed: true, record: mastermindRecord{Format: 1, MastermindState: MastermindState{Status: "uncertain", Blocker: "storage", Stage: "Mastermind settings need recovery", Error: message, UpdatedAt: time.Now().UTC()}}}
+}
+
+func validMastermindWorkerPath(value string) bool {
+	return strings.HasPrefix(value, "/") && len(value) <= 4096 && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+func mastermindPendingPhase(phase string) bool {
+	return phase == "creating" || phase == "worker-prepared" || phase == "worker-dispatched"
 }
 
 func validMastermindID(id string) bool {
@@ -126,19 +140,26 @@ func openMastermindStore(dir string) (*mastermindStore, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return nil, fmt.Errorf("read Mastermind state: %w", err)
 	}
+	if rec.Execution == "" && rec.Phase != "queued" {
+		rec.Execution = "native"
+	}
 	if rec.Format != 1 || rec.Revision > maxMastermindRevision || rec.Config == nil || validMastermindConfig(*rec.Config) != nil || rec.HostTarget == "" ||
-		(rec.Phase != "queued" && rec.Phase != "creating" && rec.Phase != "attached" && rec.Phase != "rejected") ||
+		(rec.Execution != "" && rec.Execution != "native" && rec.Execution != "worker") ||
+		(rec.Phase != "queued" && !mastermindPendingPhase(rec.Phase) && rec.Phase != "attached" && rec.Phase != "rejected") ||
 		(rec.Phase != "queued" && (!validMastermindID(rec.Token) || rec.CanonicalCwd == "")) ||
-		(rec.Phase == "attached" && (rec.Session == nil || !mastermindMatches(rec, *rec.Session))) ||
-		(rec.Session != nil && rec.Phase != "attached") {
+		((rec.Phase == "worker-prepared" || rec.Phase == "worker-dispatched") && rec.Execution != "worker") ||
+		(rec.Execution == "worker" && (!validMastermindWorkerPath(rec.WorkerPath) || (rec.WorkerStateDir != "" && !validMastermindWorkerPath(rec.WorkerStateDir)))) ||
+		((rec.Phase == "attached" || rec.Phase == "worker-prepared" || rec.Phase == "worker-dispatched") && (rec.Session == nil || !mastermindMatches(rec, *rec.Session))) ||
+		(rec.Session != nil && rec.Phase != "attached" && rec.Phase != "worker-prepared" && rec.Phase != "worker-dispatched") {
 		return nil, errors.New("Invalid Mastermind state; preserve mastermind.json for inspection")
 	}
 	if !rec.Enabled {
 		rec.Status, rec.Stage = "disabled", "Mastermind is disabled; its session is preserved"
-	} else if rec.Phase == "creating" {
+	} else if mastermindPendingPhase(rec.Phase) {
 		rec.Status, rec.Stage = "uncertain", "Checking a previous Mastermind startup; nothing will be replayed"
 	} else if rec.Phase == "rejected" {
 		rec.Status, rec.Stage = "blocked", "The previous start was rejected; retry after resolving setup"
+		rec.Blocker = "launch"
 	} else {
 		rec.Status, rec.Stage = "waiting", "Waiting to reconnect to the Mastermind machine"
 	}
@@ -197,20 +218,26 @@ func (s *mastermindStore) transition(revision uint64, change func(*mastermindRec
 	if err := s.saveLocked(next); err != nil {
 		s.err = "Mastermind state could not be saved. No further start requests will be sent; inspect this machine's sessions before retrying."
 		s.record.Status, s.record.Stage, s.record.Error = "uncertain", "Mastermind state needs attention", s.err
+		s.record.Blocker = "storage"
 		return false
 	}
 	return true
 }
 
-func (s *mastermindStore) notice(revision uint64, status, stage, message string) {
+func (s *mastermindStore) notice(revision uint64, status, stage, message string, reason ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.record.Revision != revision || !s.record.Enabled || s.err != "" {
 		return
 	}
-	if s.record.Status == status && s.record.Stage == stage && s.record.Error == message {
+	blocker := ""
+	if len(reason) != 0 {
+		blocker = reason[0]
+	}
+	if s.record.Status == status && s.record.Stage == stage && s.record.Error == message && s.record.Blocker == blocker {
 		return
 	}
 	s.record.Status, s.record.Stage, s.record.Error = status, stage, message
+	s.record.Blocker = blocker
 	s.record.UpdatedAt = time.Now().UTC()
 }

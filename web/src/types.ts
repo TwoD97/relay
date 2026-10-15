@@ -106,6 +106,8 @@ export interface MastermindState {
   status: "unconfigured" | "disabled" | "waiting" | "starting" | "running" | "exited" | "interrupted" | "missing" | "blocked" | "uncertain";
   stage: string;
   error?: string;
+  execution?: "native" | "worker";
+  blocker?: "runtime" | "harness" | "folder" | "worker" | "host" | "identity" | "storage" | "launch";
   session?: Session;
   updatedAt: string;
 }
