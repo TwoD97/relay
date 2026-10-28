@@ -199,15 +199,27 @@ func (p *liveSession) resize(cols, rows int) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.resizeLocked(cols, rows)
+}
+
+// Commit canonical geometry only after the kernel accepts it. Output, the
+// screen model, and viewer geometry remain ordered under mu; a failed ioctl
+// leaves the old model intact and controlError reports those actual dimensions.
+func (p *liveSession) resizeLocked(cols, rows int) error {
+	if p.cols == uint16(cols) && p.rows == uint16(rows) {
+		return nil
+	}
+	if p.pty != nil && !p.finished {
+		if err := resizePTY(p.pty, uint16(cols), uint16(rows)); err != nil {
+			return err
+		}
+	}
 	p.cols, p.rows = uint16(cols), uint16(rows)
 	if p.screen != nil {
 		p.screen.resize(cols, rows)
 	}
 	p.publishControlLocked("")
-	if p.pty == nil || p.finished {
-		return nil
-	}
-	return resizePTY(p.pty, p.cols, p.rows)
+	return nil
 }
 func (p *liveSession) stop(interrupted bool) {
 	p.stopOnce.Do(func() {

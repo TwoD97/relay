@@ -35,7 +35,7 @@ test("opting in prepares literal project paths before creating the agent without
   await page.screenshot({ path: testInfo.outputPath("shared-project-context.png"), fullPage: true, animations: "disabled" });
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Implement review", exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Shared project context is ready.");
+  await expect(page.getByRole("status").filter({ hasText: "Shared project context is ready." })).toBeVisible();
   expect(fixture.mutations).toEqual([
     { method: "POST", path: "/api/hosts/dev/project-context", csrf: "fixture-csrf", body: { path: projectPath } },
     { method: "POST", path: "/api/hosts/dev/runtime/sessions", csrf: "fixture-csrf", body: { title: "Implement review", workspace: "Client project", cwd: projectPath, harness: "codex" } },

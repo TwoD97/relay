@@ -148,7 +148,7 @@ test("an unconfirmed launch mode is not fabricated or retried", async ({ page })
   await dialog.getByRole("radio", { name: "Auto", exact: true }).check();
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("did not confirm the requested launch mode");
+  await expect(page.getByRole("status").filter({ hasText: "did not confirm the requested launch mode" })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Provider default", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Auto · full access", { exact: true })).toHaveCount(0);
   expect(attempts).toBe(1);

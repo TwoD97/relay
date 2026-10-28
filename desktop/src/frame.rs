@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Webview, Window};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, Webview, Window};
 use url::Url;
 
 pub const HEIGHT: f64 = 40.0;
@@ -40,31 +40,50 @@ pub fn trusted_page(label: &str, url: &Url) -> bool {
         && url.port().is_none()
 }
 
-fn dimensions(width: f64, height: f64) -> (f64, f64, f64) {
-    let width = width.max(1.0);
-    let header = HEIGHT.min(height.max(1.0));
-    (width, header, (height - header).max(1.0))
+fn bounds(size: PhysicalSize<u32>, scale: f64) -> Option<[Rect; 3]> {
+    if size.width == 0 || size.height < 2 || !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let header = (HEIGHT * scale)
+        .round()
+        .clamp(1.0, (size.height - 1) as f64) as u32;
+    // Partition physical pixels once. Passing logical bounds back to Wry would
+    // convert them using each child HWND's DPI, which may still be changing.
+    Some([
+        Rect {
+            position: PhysicalPosition::new(0.0, header as f64).into(),
+            size: PhysicalSize::new(size.width, size.height - header).into(),
+        },
+        Rect {
+            position: PhysicalPosition::new(0.0, 0.0).into(),
+            size: PhysicalSize::new(size.width, header).into(),
+        },
+        Rect {
+            position: PhysicalPosition::new(
+                (8.0 * scale).round(),
+                header as f64 + (4.0 * scale).round(),
+            )
+            .into(),
+            size: PhysicalSize::new((MENU_WIDTH * scale).round(), (MENU_HEIGHT * scale).round())
+                .into(),
+        },
+    ])
 }
 
 pub fn layout(window: &Window) {
     let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
         return;
     };
-    if size.width == 0 || size.height == 0 {
+    layout_at(window, size, scale);
+}
+
+pub fn layout_at(window: &Window, size: PhysicalSize<u32>, scale: f64) {
+    let Some(bounds) = bounds(size, scale) else {
         return;
-    }
-    let (width, header, content_height) =
-        dimensions(size.width as f64 / scale, size.height as f64 / scale);
-    for (label, x, y, width, height) in [
-        ("main", 0.0, header, width, content_height),
-        ("chrome", 0.0, 0.0, width, header),
-        ("app-menu", 8.0, header + 4.0, MENU_WIDTH, MENU_HEIGHT),
-    ] {
+    };
+    for (label, bounds) in ["main", "chrome", "app-menu"].into_iter().zip(bounds) {
         if let Some(view) = window.app_handle().get_webview(label) {
-            let _ = view.set_bounds(Rect {
-                position: LogicalPosition::new(x, y).into(),
-                size: LogicalSize::new(width, height).into(),
-            });
+            let _ = view.set_bounds(bounds);
         }
     }
     update_state(window);
@@ -238,10 +257,59 @@ mod tests {
     }
 
     #[test]
-    fn frame_layout_preserves_content_and_handles_tiny_resize() {
-        assert_eq!(dimensions(1280.0, 860.0), (1280.0, 40.0, 820.0));
-        assert_eq!(dimensions(390.0, 500.0), (390.0, 40.0, 460.0));
-        assert_eq!(dimensions(0.0, 0.0), (1.0, 1.0, 1.0));
+    fn frame_layout_partitions_every_physical_pixel_at_fractional_dpi() {
+        for scale in [1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.25, 3.0] {
+            for size in [
+                PhysicalSize::new(1281, 861),
+                PhysicalSize::new(977, 703),
+                PhysicalSize::new(391, 501),
+            ] {
+                let [content, chrome, menu] = bounds(size, scale).unwrap();
+                // Physical bounds must not be rescaled even if a child still
+                // reports the previous monitor's DPI during this event.
+                for child_scale in [1.0, 1.25, 2.0] {
+                    let content_size = content.size.to_physical::<u32>(child_scale);
+                    let content_pos = content.position.to_physical::<i32>(child_scale);
+                    let chrome_size = chrome.size.to_physical::<u32>(child_scale);
+                    assert_eq!(content_size.width, size.width);
+                    assert_eq!(chrome_size.width, size.width);
+                    assert_eq!(content_pos.x, 0);
+                    assert_eq!(content_pos.y as u32, chrome_size.height);
+                    assert_eq!(chrome_size.height + content_size.height, size.height);
+                    assert_eq!(chrome_size.height, (HEIGHT * scale).round() as u32);
+                    assert_eq!(
+                        menu.position.to_physical::<i32>(child_scale).y,
+                        content_pos.y + (4.0 * scale).round() as i32
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dpi_transition_uses_event_dimensions_and_ignores_minimized_sizes() {
+        let old = PhysicalSize::new(1280, 860);
+        let new = PhysicalSize::new(1920, 1290);
+        let [content, chrome, _] = bounds(new, 1.5).unwrap();
+        assert_eq!(
+            content.size.to_physical::<u32>(1.0),
+            PhysicalSize::new(1920, 1230)
+        );
+        assert_eq!(
+            chrome.size.to_physical::<u32>(1.0),
+            PhysicalSize::new(1920, 60)
+        );
+        assert_ne!(content.size.to_physical::<u32>(1.0).width, old.width);
+        for size in [
+            PhysicalSize::new(0, 860),
+            PhysicalSize::new(1280, 0),
+            PhysicalSize::new(1280, 1),
+        ] {
+            assert!(bounds(size, 1.0).is_none());
+        }
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(bounds(old, scale).is_none());
+        }
     }
 
     #[test]

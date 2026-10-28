@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -34,6 +35,9 @@ type terminalModel struct {
 	cursorVisible           bool
 	cursorStyle             int
 	marginTop, marginBottom int
+	wrapPending             bool
+	charsets                [4]byte
+	gl, gr, singleShift     byte
 }
 
 var replayDECModes = map[int]bool{1: true, 6: true, 7: true, 9: true, 25: true, 66: true, 69: true, 1000: true, 1001: true, 1002: true, 1003: true, 1004: true, 1005: true, 1006: true, 1015: true, 1016: true, 1047: true, 1048: true, 1049: true, 2004: true, 2026: true, 2027: true, 2048: true}
@@ -48,7 +52,7 @@ func newTerminalModel(cols, rows int) *terminalModel {
 	e.SetScrollbackSize(1)
 	syntax := ansi.NewParser()
 	syntax.SetDataSize(1)
-	m := &terminalModel{syntax: syntax, emulator: e, modes: make(map[ansi.Mode]bool), cursorVisible: true, cursorStyle: 1, marginBottom: rows}
+	m := &terminalModel{syntax: syntax, emulator: e, modes: make(map[ansi.Mode]bool), cursorVisible: true, cursorStyle: 1, marginBottom: rows, charsets: [4]byte{'B', 'B', 'B', 'B'}, gr: 1}
 	for n := range replayDECModes {
 		m.modes[ansi.DECMode(n)] = false
 	}
@@ -57,8 +61,18 @@ func newTerminalModel(cols, rows int) *terminalModel {
 	m.modes[ansi.DECMode(7)] = true
 	m.modes[ansi.DECMode(25)] = true
 	e.SetCallbacks(vt.Callbacks{
-		EnableMode:       func(mode ansi.Mode) { m.modes[mode] = true },
-		DisableMode:      func(mode ansi.Mode) { m.modes[mode] = false },
+		EnableMode: func(mode ansi.Mode) {
+			m.modes[mode] = true
+			if mode == ansi.DECMode(6) {
+				m.wrapPending = false
+			}
+		},
+		DisableMode: func(mode ansi.Mode) {
+			m.modes[mode] = false
+			if mode == ansi.DECMode(6) {
+				m.wrapPending = false
+			}
+		},
 		CursorVisibility: func(v bool) { m.cursorVisible = v },
 		CursorStyle: func(style vt.CursorStyle, blink bool) {
 			m.cursorStyle = int(style)*2 + 1
@@ -69,6 +83,7 @@ func newTerminalModel(cols, rows int) *terminalModel {
 		AltScreen: func(on bool) {
 			if on {
 				m.pens[1] = m.pens[0]
+				m.wrapPending = false
 			}
 		},
 	})
@@ -124,6 +139,7 @@ func newTerminalModel(cols, rows int) *terminalModel {
 		if top > 0 && bottom > top && bottom <= e.Height() {
 			m.marginTop = top - 1
 			m.marginBottom = bottom
+			m.wrapPending = false
 		}
 		return false
 	})
@@ -135,6 +151,9 @@ func newTerminalModel(cols, rows int) *terminalModel {
 		m.modes = make(map[ansi.Mode]bool)
 		m.marginTop = 0
 		m.marginBottom = e.Height()
+		m.wrapPending = false
+		m.charsets = [4]byte{'B', 'B', 'B', 'B'}
+		m.gl, m.gr, m.singleShift = 0, 1, 0
 		return false
 	})
 	m.registerQueries()
@@ -153,10 +172,39 @@ func (m *terminalModel) saveCursor() {
 	m.saved[i] = true
 }
 func (m *terminalModel) write(data []byte) {
-	for _, b := range data {
+	// Preserve printable runs (including grapheme clusters). Splitting only at
+	// control boundaries lets us retain pending wrap without reading private VT
+	// fields or changing how the emulator groups combining characters.
+	start, textChunk := 0, false
+	var printed []byte
+	flush := func(end int) {
+		if end <= start {
+			return
+		}
+		if textChunk {
+			m.writeText(printed)
+		} else {
+			_, _ = m.emulator.Write(data[start:end])
+		}
+		printed = printed[:0]
+		start = end
+	}
+	for i, b := range data {
 		old := m.syntax.State()
 		action := m.syntax.Advance(b)
 		state := m.syntax.State()
+		text := action == ansiparser.PrintAction || old == ansiparser.Utf8State || state == ansiparser.Utf8State
+		if text != textChunk {
+			flush(i)
+			textChunk = text
+		}
+		if action == ansiparser.PrintAction {
+			printed = utf8.AppendRune(printed, m.syntax.Rune())
+		}
+		if !text && (action == ansiparser.ExecuteAction || action == ansiparser.DispatchAction || state == ansiparser.GroundState) {
+			flush(i + 1)
+			m.trackControl(old, action, b)
+		}
 		if state == ansiparser.GroundState {
 			m.pending = m.pending[:0]
 			m.pendingOversized = false
@@ -175,7 +223,7 @@ func (m *terminalModel) write(data []byte) {
 			m.pendingOversized = true
 		}
 	}
-	_, _ = m.emulator.Write(data)
+	flush(len(data))
 }
 func (m *terminalModel) resize(cols, rows int) {
 	if m.emulator.IsAltScreen() {
@@ -189,11 +237,12 @@ func (m *terminalModel) resize(cols, rows int) {
 		m.mainScreen = strings.Join(lines, "\n")
 	}
 	m.emulator.Resize(cols, rows)
+	m.wrapPending = false
 	m.marginTop = 0
 	m.marginBottom = rows
 }
 func paintScreen(out *strings.Builder, screen string, rows int) {
-	out.WriteString("\x1b[0m\x1b[?6l\x1b[?7l\x1b[?69l\x1b[r\x1b[2J")
+	out.WriteString("\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[0m\x1b[?6l\x1b[?7l\x1b[?69l\x1b[r\x1b[2J")
 	for row, line := range strings.Split(screen, "\n") {
 		if row >= rows {
 			break
@@ -256,6 +305,37 @@ func (m *terminalModel) snapshot(history []byte) []byte {
 	} else {
 		out.WriteString("\x1b[?25l")
 	}
+	// CUP deliberately clears delayed wrap. Repaint the last cell to restore
+	// that state, then restore the pen without moving the cursor again.
+	if m.wrapPending && m.modes[ansi.DECMode(7)] {
+		position := e.CursorPosition()
+		// Wide cells have a width-zero continuation in the final column.
+		// Repaint their leading cell, never overwrite the continuation alone.
+		for position.X > 0 {
+			cell := e.CellAt(position.X, position.Y)
+			if cell == nil || cell.Width != 0 {
+				break
+			}
+			position.X--
+		}
+		if cell := e.CellAt(position.X, position.Y); cell != nil && cell.Width > 0 {
+			row := position.Y + 1
+			if m.modes[ansi.DECMode(6)] {
+				row -= m.marginTop
+			}
+			fmt.Fprintf(&out, "\x1b[%d;%dH", row, position.X+1)
+			out.WriteString("\x1b[0m")
+			out.WriteString(cell.Style.String())
+			out.WriteString(cell.Link.String())
+			out.WriteString(cell.Content)
+			if cell.Link.URL != "" {
+				out.WriteString("\x1b]8;;\x1b\\")
+			}
+			out.WriteString("\x1b[0m")
+			out.WriteString(m.pens[i].String())
+		}
+	}
+	m.restoreCharsets(&out)
 	out.Write(m.pending)
 	return []byte(out.String())
 }

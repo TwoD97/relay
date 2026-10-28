@@ -128,6 +128,79 @@ Linux native gate uses a private Xvfb clipboard. Windows native clipboard checks
 require the optional `-Clipboard` gate documented in the desktop README; ordinary
 Windows installer checks do not exercise the user's clipboard.
 
+## Terminal geometry and continuation — 2026-10-28
+
+Desktop version: `0.2.1`. Runtime bundle: `0.2.1-dev.889de5b3e6f3`.
+
+- All 316 distinct interface checks passed without skips: 149 desktop fixtures,
+  149 narrow-window fixtures, and 18 cases against the compiled runtime. The
+  real-binary cases include six ASCII/wide/graphics right-edge continuations,
+  controller recovery, exclusive control, permission decisions, Manual/Auto
+  launches, and Mastermind compatibility with the checksum-verified old runtime.
+- Baseline regressions reproduced clipped controlling grids and unreachable
+  observer edges in both viewport projects. Real PTY tests against the previous
+  bundle separately reproduced lost delayed wrap, wide-glyph continuation, and
+  DEC line-drawing character-set state when a second xterm viewer attached.
+- The corrected client sizes an unpadded mount, waits for canonical resize
+  acknowledgements, and preserves ordered terminal bytes and geometry. Focused
+  coverage includes deferred/rejected resizes, two viewers, hidden/revealed
+  terminals, Unicode, scrollback, font preference bounds/persistence, and
+  5000×4200 viewports within the runtime's 500-column/300-row limits.
+- Go formatting, vet, and all 242 top-level race tests passed. Seven opt-in
+  cases were skipped by the default suite. The 15 native SSH cases and both
+  disposable SSH integration suites passed separately, including two-host
+  control, controller crash/restart, session preservation, maintenance, and
+  host-key rejection. Clean provider installs verified Codex 0.165.0 and Claude
+  Code 2.1.312 without login or inference.
+- An initial Go run overlapped replacement of the generated embedded frontend
+  assets and failed to compile those deleted asset names. The complete race
+  suite was rerun successfully after freezing the build inputs.
+- The first real-xterm pass caught a character-set restore ordering regression:
+  xterm treats the legacy GR selectors as GL aliases. Restoring GL last fixed
+  initial and continued line drawing; a direct public-xterm-API regression also
+  reproduces the former ordering failure. Final runtime payloads were rebuilt
+  with the already validated, unchanged frontend assets.
+- Linux installation regressions passed all ten cases. Portable archive checks
+  passed eight cases with the Windows-only junction case skipped; the delivered
+  Windows artifact remains an installer.
+- Native Rust formatting, strict Clippy, and all tests passed on Linux (16)
+  and Windows (15). The final-bundle Linux WebKit gate passed real PTY editing,
+  exclusive control, isolated clipboard, appearance/IPC, authentication, and
+  close/reopen preservation. At three odd window sizes, the visible grid and
+  remote `stty size` agreed at 89×21, 110×28, and 69×16. The fit checks account
+  for xterm's actual reserved scrollbar width while retaining strict edge bounds.
+- The final Windows NSIS payload passed exact allowlist verification: 17
+  application files, six installer plugins, GUI product version 0.2.1, and
+  matching hashes for all three runtime binaries. Its extracted application
+  passed isolated `-LaunchOnly` using default packaged resources, including
+  exact native window geometry, appearance, authentication, and startup without
+  WSL or a console window. No personal Windows installation was modified.
+- The extracted Windows package passed `-RenderingOnly` against a disposable
+  SSH host: verified host trust, password login/bootstrap, seven window/font
+  states with exact PTY/visible-dimension agreement, exclusive control, saved
+  host reconnect, and close/reopen preservation. The test used the monitor's
+  existing 96 DPI, with no physical mouse input or Windows clipboard access.
+  Preliminary attempts correctly rejected a mismatched fixture fingerprint and
+  exposed a PowerShell 5 test-string encoding error; both test setup issues were
+  corrected before the passing run, without changing the verified app payload.
+
+The Windows installer is 12,100,379 bytes, SHA-256
+`f4effca8618125b6a0fb15bbb148f2b213e90c678eff5942cfcfe5d25dcfd18d`.
+
+Fractional scaling coverage uses deterministic native geometry tests and
+Chromium device-scale emulation; it does not claim physical movement between
+monitors at every Windows DPI. Tests use disposable sessions and state. Existing
+remote daemons are not restarted to activate these fixes: client rendering
+improvements apply immediately, while server snapshot corrections require the
+updated runtime to start after its existing sessions have finished.
+
+Snapshot coverage is targeted, not complete xterm emulation. The existing server
+model clips its normal screen on resize while xterm can reflow long shell lines;
+after resizing and reconnecting, those lines may need an application redraw.
+Arbitrary terminal extensions and width-changing graphemes split across writes
+are also outside the claimed continuation coverage. Raw history remains bounded
+separately at 1 MiB.
+
 ## Live-runtime compatibility and Windows installer — 2026-10-15
 
 Desktop version: `0.2.0`. Runtime bundle: `0.2.0-dev.52b7d81b0fc7`.

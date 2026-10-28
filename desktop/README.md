@@ -33,7 +33,7 @@ Close the existing Relay window before installing or opening a different build;
 otherwise, single-instance activation focuses the already running copy. Closing
 the window leaves its controller and remote sessions running. Install over the
 existing installation, then open Relay from the Start menu. The desktop package
-version is `0.2.0`; reinstalling that same version may offer **Add/Reinstall**.
+version is `0.2.1`; reinstalling that same version may offer **Add/Reinstall**.
 The bundled runtime has its own build version and the launcher checks it before
 reusing or replacing the local controller.
 
@@ -219,7 +219,9 @@ cargo clippy --locked --all-targets -- -D warnings
 
 `scripts/test_desktop.py` (from the repository root) drives the real Linux WebKit webview with the Tauri
 WebDriver and a disposable controller/runtime. It does not authenticate providers
-or touch the user's existing sessions.
+or touch the user's existing sessions. It resizes its own window to several odd
+sizes, checks that the terminal screen fits its viewport, and compares the
+displayed columns and rows with the actual PTY's `stty size` output.
 
 `test_windows_build_stage.ps1` verifies clean staging and failure preservation
 without compilers. `test_windows_install.ps1` runs only in a fresh disposable
@@ -231,8 +233,26 @@ Its `-LaunchOnly` mode needs no SSH fixture and checks an extracted app's defaul
 resources, embedded fleet, private authentication, appearance synchronization
 and persistence, privileged-command isolation, and ordinary native launch.
 It uses isolated state and a separate WebView2 profile, disables single-instance
-activation for that test, and does not send mouse/keyboard input or access the
+activation for that test, and does not send physical mouse/keyboard input or access the
 clipboard. Cleanup is scoped to its own process identities.
+Use `-RenderingOnly` for the real SSH/PTY rendering gate without the physical
+mouse/focus or Windows clipboard checks:
+
+```powershell
+./scripts/test_windows_desktop.ps1 -Desktop C:\fixture\Relay\relay-desktop.exe -Bundle C:\fixture\Relay\runtime -Driver C:\tools\msedgedriver.exe -FixtureTarget relay@127.0.0.1 -FixturePort 2222 -FixtureFingerprint SHA256:EXPECTED_FIXTURE_FINGERPRINT -FixturePasswordFile C:\fixture\ssh-password -Artifacts C:\fixture\evidence -RenderingOnly
+```
+
+The SSH host must be disposable, with `/home/relay/Relay folder smoke/Nested
+project` available for the folder-picker check. The script verifies the supplied
+host fingerprint before entering the fixture password. It checks exact physical
+coverage of the native title bar and content at odd window sizes, maximize and
+restore; it also changes terminal font size and compares visible dimensions
+with the remote PTY. Resizing targets only the test-owned window. No global OS
+DPI setting, personal profile, or clipboard is changed. Fractional-DPI Rust
+tests and browser engine scale emulation cover deterministic geometry and
+layout; these are separate from physical mixed-monitor testing. The native
+gate measures the monitor's existing DPI and does not claim a monitor transition.
+
 Pass `-Clipboard` with a disposable Windows account clipboard to additionally
 check native text copy/paste. This replaces clipboard contents with test text
 and never captures the account's previous clipboard. The Linux gate always

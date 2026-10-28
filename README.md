@@ -139,6 +139,12 @@ text and interrupts the remote process when nothing is selected. Ctrl+V pastes
 text; Ctrl+Shift+C/V also copy and paste. Pasted text respects bracketed-paste
 mode. Touch screens retain a small row for keys absent from their keyboard.
 
+The terminal footer shows its actual columns and rows. Use **− / +** there, or
+Ctrl+− / Ctrl++, to change text size; Ctrl+0 resets it. The size is saved for this
+client. Window resizing and display scaling refit the controlling terminal.
+Watching windows keep the shared session's dimensions and can scroll in both
+directions when the screen is larger than their available space.
+
 Opening a terminal watches it. Clicking or focusing it claims available exclusive
 typing and resize access; **Take control** also remains available. Other desktop windows
 continue watching and cannot take an occupied lease. Closing the view or leaving

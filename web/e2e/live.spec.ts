@@ -202,6 +202,64 @@ test("real binary: shell, exclusive viewer, controller restart and finished-sess
   }
 });
 
+for (const variant of ["ascii", "wide", "graphics"] as const) {
+  test(`real terminal: ${variant} right-edge output continues identically after a new viewer attaches`, async ({ page, context }) => {
+    test.skip(!binary, "Set RELAY_LIVE_BINARY to a freshly built Relay executable.");
+    test.setTimeout(60000);
+    const temporary = await mkdtemp(join(tmpdir(), "relay-rendering-"));
+    const runtimeDir = join(temporary, "runtime");
+    const proceed = join(temporary, "continue");
+    const script = join(temporary, "screen.py");
+    let daemon: ChildProcess | undefined;
+    let client: ChildProcess | undefined;
+    try {
+      // Output comes from a real PTY and pauses exactly at its right edge.
+      // The second client must reconstruct cursor/charset state, then handle
+      // new output just like the original xterm renderer. No provider account.
+      await writeFile(script, `import os, time\nfrom pathlib import Path\ncols = os.get_terminal_size().columns\nmode = ${JSON.stringify(variant)}\ntext = ("X" * (cols - 2) + "界") if mode == "wide" else ("q" if mode == "graphics" else "X") * cols\nprefix = "\\x1b(0" if mode == "graphics" else ""\nos.write(1, ("\\x1b[2J\\x1b[H" + prefix + text).encode())\nwhile not Path(${JSON.stringify(proceed)}).exists(): time.sleep(.02)\nos.write(1, b"q" if mode == "graphics" else b"Z")\nwhile True: time.sleep(1)\n`);
+      daemon = spawn(resolve(binary!), ["daemon", "--state-dir", runtimeDir], { stdio: "ignore" });
+      await expect.poll(() => existsSync(join(runtimeDir, "run", "daemon.sock"))).toBeTruthy();
+      const launch = await startUI(resolve(binary!), join(temporary, "client"), runtimeDir);
+      client = launch.process;
+      await page.goto(launch.url);
+      await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
+      await page.locator(".machine-card").filter({ hasText: "This computer" }).click();
+      await page.getByRole("button", { name: "New session", exact: true }).first().click();
+      await page.getByLabel("Project folder").fill(temporary);
+      await page.getByRole("dialog").getByLabel("Workspace", { exact: false }).fill("Rendering test");
+      await page.getByLabel("Session name").fill("Right-edge fixture");
+      await page.getByRole("button", { name: "Start session", exact: true }).click();
+      await page.getByRole("button", { name: "Take control", exact: true }).click();
+      await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
+      await page.locator(".xterm-helper-textarea").focus();
+      await page.keyboard.type(`exec python3 '${script.replaceAll("'", "'\\''")}'`);
+      await page.keyboard.press("Enter");
+      const first = page.locator(".xterm-rows > div").nth(0);
+      const finalGlyph = variant === "graphics" ? "─" : variant === "wide" ? "界" : "X";
+      await expect(first).toHaveText(new RegExp(`${finalGlyph}$`));
+      const initial = await first.textContent();
+      expect(initial!.length).toBeGreaterThan(10);
+      const watcher = await context.newPage();
+      try {
+        await watcher.goto(page.url());
+        await expect(watcher.getByText("Watching", { exact: true })).toBeVisible();
+        await expect(watcher.locator(".xterm-rows > div").nth(0)).toHaveText(initial!);
+        expect(await watcher.locator(".terminal-shell").getAttribute("data-terminal-cols")).toBe(await page.locator(".terminal-shell").getAttribute("data-terminal-cols"));
+        await writeFile(proceed, "continue");
+        const next = variant === "graphics" ? "─" : "Z";
+        for (const view of [page, watcher]) {
+          await expect(view.locator(".xterm-rows > div").nth(0)).toHaveText(initial!);
+          await expect(view.locator(".xterm-rows > div").nth(1)).toHaveText(next);
+        }
+      } finally { await watcher.close(); }
+    } finally {
+      await stop(client);
+      await stop(daemon);
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+}
+
 test("one-time sign-in link works when clicked from an external site", async ({ page }) => {
   test.skip(!binary, "Set RELAY_LIVE_BINARY to a freshly built Relay executable.");
   test.setTimeout(45000);

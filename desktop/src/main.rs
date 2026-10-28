@@ -150,8 +150,15 @@ fn run() -> tauri::Result<()> {
             menu_view.hide()?;
             let frame_window = window.clone();
             window.on_window_event(move |event| match event {
-                WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                    frame::layout(&frame_window);
+                WindowEvent::Resized(size) => {
+                    if let Ok(scale) = frame_window.scale_factor() {
+                        frame::layout_at(&frame_window, *size, scale);
+                    }
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size, .. } => {
+                    // Tao emits this before applying the new native rectangle.
+                    // Reading inner_size here would mix old dimensions/new DPI.
+                    frame::layout_at(&frame_window, *new_inner_size, *scale_factor);
                 }
                 WindowEvent::Focused(_) => {
                     frame::update_state(&frame_window);

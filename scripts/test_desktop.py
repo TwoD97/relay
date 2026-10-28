@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 
 ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
@@ -337,6 +338,43 @@ class WebDriver:
         require(text == "RELAY_COPY_ME", "Ctrl+C did not copy the selected native terminal text")
         print("PASS: native text clipboard, Ctrl+V paste and Ctrl+C selection copy", flush=True)
 
+    def check_terminal_geometry(self, artifacts):
+        original = self.call("GET", "/window/rect")
+        records = []
+        try:
+            for width, height in ((1003, 733), (1191, 863), (841, 641)):
+                self.call("POST", "/window/rect", {"width": width, "height": height})
+                geometry = wait_for(lambda: self.script("""
+                    const shell=document.querySelector('.session-view .terminal-shell');
+                    const mount=shell?.querySelector('.terminal-mount'), screen=shell?.querySelector('.xterm-screen');
+                    if(!shell||!mount||!screen)return false;
+                    const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows);
+                    if(!cols||!rows)return false;
+                    const m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect();
+                    window.relayGeometryProbe={cols,rows,dpr:devicePixelRatio,window:{width:innerWidth,height:innerHeight},mount:m.toJSON(),screen:s.toJSON(),status:shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent};
+                    if(!s.width||!s.height||s.left<m.left-1||s.top<m.top-1||s.right>m.right+1||s.bottom>m.bottom+1)return false;
+                    const scrollbar=shell.querySelector(".xterm-scrollable-element > .scrollbar.vertical")?.getBoundingClientRect().width||0;
+                    if(m.width-s.width>scrollbar+s.width/cols+2||m.height-s.height>s.height/rows+2)return false;
+                    if(!shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent.includes(`${cols} × ${rows}`))return false;
+                    return {cols,rows,dpr:devicePixelRatio,mount:{width:m.width,height:m.height},screen:{width:s.width,height:s.height}};
+                """), "native WebKit terminal fits its current viewport")
+                # The expected dimensions are deliberately absent from the
+                # submitted command; only the real PTY can produce this result.
+                marker = "RELAY_SIZE_" + uuid.uuid4().hex[:8]
+                self.terminal_command("printf '" + marker + " '; stty size")
+                expected = f"{marker} {geometry['rows']} {geometry['cols']}"
+                wait_for(lambda: self.terminal_contains(expected), "remote PTY and displayed terminal dimensions agree")
+                geometry["window"] = {"width": width, "height": height}
+                records.append(geometry)
+                self.screenshot(artifacts / f"native-terminal-{width}x{height}.png")
+        except Exception:
+            (artifacts / "native-terminal-geometry-failure.json").write_text(json.dumps(self.script("return window.relayGeometryProbe || null;"), indent=2) + "\n")
+            raise
+        finally:
+            self.call("POST", "/window/rect", original)
+        (artifacts / "native-terminal-geometry.json").write_text(json.dumps(records, indent=2) + "\n")
+        print("PASS: native WebKit terminal viewport and real PTY geometry across odd window sizes", flush=True)
+
     def screenshot(self, destination):
         destination.write_bytes(base64.b64decode(self.call("GET", "/screenshot")))
 
@@ -504,6 +542,7 @@ def run(args):
                 denied, _ = second.request(input_path, "POST", {"data": "printf 'RELAY_DENIED_INPUT\\n'\r"})
                 require(denied == 409, "Second client bypassed native exclusive control")
                 browser.check_terminal_keys(session)
+                browser.check_terminal_geometry(artifacts)
                 browser.check_terminal_clipboard()
                 browser.terminal_command("printf 'RELAY_%s\\n' 'NATIVE_INPUT_OK'")
                 wait_for(lambda: "RELAY_NATIVE_INPUT_OK" in second.history(session), "native PTY command output")

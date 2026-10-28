@@ -157,6 +157,16 @@ Runtime terminals attach as observers. `{type:"claim"}` and `{type:"release"}`
 manage a single writer lease; a lease expires after 60 seconds without input.
 Server text frames `{type:"control",owner,available,reason?,cols,rows}` report
 ownership and canonical geometry. SSH setup terminals do not use this lease protocol.
+For shared terminals, a resize message is a proposal: clients retain the current
+grid until the server reports its resulting geometry. Apply control frames after
+preceding terminal bytes have been parsed, including the initial geometry before
+the reconnect snapshot. Observers never resize the PTY to fit their own window.
+The runtime commits model dimensions only after the PTY accepts the resize; on
+failure it reports the unchanged geometry to the requesting controller.
+Snapshot continuation covers tested cursor, right-edge wrap, wide-character,
+and character-set cases. The server's normal screen uses clipping on resize,
+not xterm's full soft-line reflow; long lines can require an application redraw
+after resize/reconnect. It is not a complete serialization of all VT extensions.
 One read loop and one write loop per websocket. Clients reconnect explicitly/with
 backoff and replay history once per attach. Bounded output and backpressure required.
 

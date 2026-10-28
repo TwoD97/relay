@@ -5,7 +5,7 @@ export const local: Host = { id: "local", name: "This computer", target: "local"
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; deferTerminalControl?: boolean; deferTerminalClaim?: boolean } = {}) {
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; terminalGeometry?: { cols: number; rows: number }; deferTerminalControl?: boolean; deferTerminalClaim?: boolean; deferTerminalResize?: boolean } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
@@ -20,6 +20,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
   const sessionRequests: Record<string, number> = {};
   const terminals = new Set<{ ws: WebSocketRoute; owner: boolean }>();
   let terminalOccupied = options.terminalOccupied ?? false;
+  let terminalGeometry = options.terminalGeometry ?? { cols: 120, rows: 32 };
   let deferredSetup = options.deferSetupAttachments ?? 0;
   let stateRequests = 0;
   let authorized = !options.unauthorized;
@@ -164,7 +165,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     if (!setup) {
       terminals.add(terminal);
       ws.onClose(() => terminals.delete(terminal));
-      if (!options.deferTerminalControl) ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, cols: 120, rows: 32 }));
+      if (!options.deferTerminalControl) ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, ...terminalGeometry }));
     }
     ws.send(Buffer.from(setup ? "SSH host fingerprint: SHA256:fixture\r\nPassword: " : (options.terminalOutput ?? "\u001b[32mConnected to Relay\u001b[0m\r\n$ ")));
     ws.onMessage((raw) => {
@@ -174,10 +175,13 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
         if (!terminalOccupied && options.replayQueriesBeforeClaim) ws.send(Buffer.from("\u001b[6n".repeat(500)));
         if (options.deferTerminalClaim && !terminalOccupied) return;
         terminal.owner = !terminalOccupied;
-        ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: false, cols: 120, rows: 32 }));
+        ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: false, ...terminalGeometry }));
       }
-      if (message.type === "release") { terminal.owner = false; ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, cols: 120, rows: 32 })); }
-      if (message.type === "resize" && terminal.owner) ws.send(JSON.stringify({ type: "control", owner: true, available: false, cols: message.cols, rows: message.rows }));
+      if (message.type === "release") { terminal.owner = false; ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, ...terminalGeometry })); }
+      if (message.type === "resize" && terminal.owner && !options.deferTerminalResize) {
+        terminalGeometry = { cols: message.cols, rows: message.rows };
+        ws.send(JSON.stringify({ type: "control", owner: true, available: false, ...terminalGeometry }));
+      }
       if (message.type === "input" && (setup || terminal.owner)) ws.send(Buffer.from(String(message.data).replaceAll("\u007f", "\b \b")));
     });
   });
@@ -212,13 +216,17 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     setAuthentication: (next: boolean, token = csrfToken) => { authorized = next; csrfToken = token; },
     setTerminalOccupied: (occupied: boolean) => {
       terminalOccupied = occupied;
-      for (const terminal of terminals) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !occupied && !terminal.owner, cols: 120, rows: 32 }));
+      for (const terminal of terminals) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !occupied && !terminal.owner, ...terminalGeometry }));
+    },
+    sendTerminalGeometry: (cols: number, rows: number, reason?: string) => {
+      terminalGeometry = { cols, rows };
+      for (const terminal of terminals) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !terminalOccupied && !terminal.owner, ...terminalGeometry, reason }));
     },
     sendTerminalOutput: (data: string) => { for (const terminal of terminals) terminal.ws.send(Buffer.from(data)); },
     grantTerminalControl: () => {
       for (const terminal of terminals) {
         terminal.owner = true;
-        terminal.ws.send(JSON.stringify({ type: "control", owner: true, available: false, cols: 120, rows: 32 }));
+        terminal.ws.send(JSON.stringify({ type: "control", owner: true, available: false, ...terminalGeometry }));
       }
     },
     disconnectTerminals: () => {

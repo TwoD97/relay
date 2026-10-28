@@ -20,7 +20,7 @@ import (
 	"github.com/TwoD97/relay/web"
 )
 
-var version = "0.2.0-dev"
+var version = "0.2.1-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

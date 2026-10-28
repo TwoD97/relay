@@ -98,15 +98,7 @@ func (p *liveSession) resizeControlled(sub *subscriber, cols, rows int) error {
 	if cols < 2 || cols > 500 || rows < 2 || rows > 300 {
 		return errors.New("invalid terminal size")
 	}
-	p.cols, p.rows = uint16(cols), uint16(rows)
-	if p.screen != nil {
-		p.screen.resize(cols, rows)
-	}
-	p.publishControlLocked("")
-	if p.pty == nil || p.finished {
-		return nil
-	}
-	return resizePTY(p.pty, p.cols, p.rows)
+	return p.resizeLocked(cols, rows)
 }
 func (p *liveSession) controlError(sub *subscriber, err error) {
 	p.mu.Lock()

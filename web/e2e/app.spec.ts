@@ -50,7 +50,27 @@ test("terminal starts watching and a deliberate canvas click claims exclusive co
   await page.keyboard.type("printf hello");
   await page.keyboard.press("Enter");
   await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe("printf hello\r");
-  expect(fixture.terminalMessages.filter((message) => message.type === "resize")).toHaveLength(1);
+  // Font metrics and native scrollbar layout can settle across successive
+  // frames. Distinct proposals are valid; duplicates or an endless loop are not.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    let frames = 6;
+    const next = () => --frames ? requestAnimationFrame(next) : resolve();
+    requestAnimationFrame(next);
+  }));
+  const resizes = fixture.terminalMessages.filter((message) => message.type === "resize");
+  expect(resizes.length).toBeGreaterThan(0);
+  expect(resizes.length).toBeLessThanOrEqual(3);
+  expect(new Set(resizes.map((message) => `${message.cols}x${message.rows}`)).size).toBe(resizes.length);
+  const confirmed = resizes.at(-1)!;
+  await expect(page.locator(".terminal-shell")).toHaveAttribute("data-terminal-cols", String(confirmed.cols));
+  await expect(page.locator(".terminal-shell")).toHaveAttribute("data-terminal-rows", String(confirmed.rows));
+  await expect.poll(() => page.locator(".terminal-canvas").evaluate((canvas) => {
+    const screen = canvas.querySelector(".xterm-screen")!.getBoundingClientRect();
+    const bounds = canvas.getBoundingClientRect(), style = getComputedStyle(canvas);
+    return screen.right <= bounds.left + canvas.clientWidth - parseFloat(style.paddingRight) + 1 && screen.bottom <= bounds.top + canvas.clientHeight - parseFloat(style.paddingBottom) + 1;
+  })).toBe(true);
+  expect(fixture.terminalMessages.filter((message) => message.type === "resize")).toEqual(resizes);
+  expect(fixture.attachments).toHaveLength(1);
   await page.getByRole("button", { name: "Release control", exact: true }).click();
   await expect(page.getByText("Watching", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("session-terminal.png"), fullPage: true });
@@ -370,7 +390,7 @@ test("a failed installer never reports successful installation or offers termina
   await page.goto("/#host/local/session/session-1");
   await expect(page.getByText("This process has exited with code 1.", { exact: false })).toBeVisible();
   await expect(page.getByText("Saved output", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reconnect terminal" })).toHaveCount(0);
 });

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { ArrowDown, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Eye, Keyboard, RotateCw } from "lucide-react";
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Eye, Keyboard, Minus, Plus, RotateCw } from "lucide-react";
 import { websocketURL } from "./api";
 import { useAppearance } from "./appearance";
 import { terminalTheme } from "./terminalTheme";
+import { DEFAULT_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, setTerminalFontSize, useTerminalFontSize } from "./terminalPreferences";
 import "@xterm/xterm/css/xterm.css";
 
 type LinkState = "connecting" | "connected" | "disconnected";
@@ -13,6 +14,9 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   path: string; enabled?: boolean; autoReconnect?: boolean; exclusive?: boolean; finished?: boolean; label?: string;
 }) {
   const { resolved: appearance } = useAppearance();
+  const fontSize = useTerminalFontSize();
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const container = useRef<HTMLDivElement>(null);
@@ -20,6 +24,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const socket = useRef<WebSocket | null>(null);
   const terminal = useRef<XTerminal | null>(null);
   const connect = useRef<() => void>(() => {});
+  const refit = useRef<() => void>(() => {});
   const copySelection = useRef<() => void>(() => {});
   const pasteClipboard = useRef<() => void>(() => {});
   const enabledRef = useRef(enabled);
@@ -32,6 +37,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const [available, setAvailable] = useState(false);
   const [controlReason, setControlReason] = useState("");
   const [selected, setSelected] = useState(false);
+  const [geometry, setGeometry] = useState({ cols: 80, rows: 24 });
   const ownerRef = useRef(false);
   const claimPending = useRef(false);
   const claimIntent = useRef(false);
@@ -45,10 +51,11 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     let pendingOutput = 0;
     let generation = 0;
     let controlGeneration = 0;
+    let layoutFrame = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
     const term = new XTerminal({
       cursorBlink: false, disableStdin: true, cursorStyle: "bar", fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      fontSize: window.innerWidth < 600 ? 12 : 13, lineHeight: 1.35, scrollback: 8000,
+      fontSize: fontSizeRef.current, lineHeight: 1.2, scrollback: 8000,
       theme: terminalTheme(appearanceRef.current),
     });
     const fit = new FitAddon();
@@ -112,6 +119,14 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       // A viewer that cannot type must still be able to tab out of the terminal.
       if (event.key === "Tab" && term.options.disableStdin) return false;
       const key = event.key.toLowerCase();
+      if ((event.ctrlKey !== event.metaKey) && !event.altKey && ["+", "=", "-", "0"].includes(key)) {
+        event.preventDefault();
+        if (event.type === "keydown") {
+          const next = key === "0" ? DEFAULT_TERMINAL_FONT_SIZE : fontSizeRef.current + (key === "-" ? -1 : 1);
+          setTerminalFontSize(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, next)));
+        }
+        return false;
+      }
       if (key === "v" && event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey) {
         event.preventDefault();
         if (event.type === "keydown") term.input("\u0016", true);
@@ -124,21 +139,52 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       if (key === "c") copyText(); else pasteText();
       return false;
     });
-    const resize = () => {
-      if (disposed || !container.current || container.current.clientWidth < 30 || container.current.clientHeight < 30) return;
+    const layout = () => {
+      layoutFrame = 0;
+      if (disposed || !container.current || !container.current.getClientRects().length || container.current.clientWidth < 30 || container.current.clientHeight < 30) return;
+      term.refresh(0, term.rows - 1);
       // Observers render at the PTY's canonical geometry. Fitting a narrow
       // viewer would reflow a shared full-screen application incorrectly.
-      if (exclusive && !ownerRef.current) return;
-      fit.fit();
+      if (exclusive && (!ownerRef.current || !enabledRef.current || finishedRef.current)) return;
+      const proposed = fit.proposeDimensions();
+      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return;
+      const cols = Math.min(500, Math.max(2, proposed.cols));
+      const rows = Math.min(300, Math.max(2, proposed.rows));
+      // Shared terminals follow the runtime's ordered acknowledgement. A local
+      // resize here would interpret in-flight output at the wrong dimensions,
+      // and would diverge if the PTY rejected its window-size change.
+      if (!exclusive) term.resize(cols, rows);
       const ws = socket.current;
-      const dimensions = `${term.cols}x${term.rows}`;
+      const dimensions = `${cols}x${rows}`;
       if (ws?.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current) && lastResize !== dimensions) {
         lastResize = dimensions;
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
       }
     };
+    const resize = () => { if (!disposed && !layoutFrame) layoutFrame = requestAnimationFrame(layout); };
+    refit.current = resize;
+    const resized = term.onResize(({ cols, rows }) => {
+      setGeometry((previous) => previous.cols === cols && previous.rows === rows ? previous : { cols, rows });
+    });
+    setGeometry({ cols: term.cols, rows: term.rows });
     const observer = new ResizeObserver(resize);
     observer.observe(container.current);
+    window.addEventListener("resize", resize);
+    window.addEventListener("focus", resize);
+    window.visualViewport?.addEventListener("resize", resize);
+    document.addEventListener("visibilitychange", resize);
+    document.fonts?.addEventListener("loadingdone", resize);
+    void document.fonts?.ready.then(resize);
+    // Moving between monitors can change device pixels without changing the
+    // element's CSS size. Rearm the media query at each new scale factor.
+    let scale: MediaQueryList | undefined;
+    const scaleChanged = () => {
+      scale?.removeEventListener("change", scaleChanged);
+      scale = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      scale.addEventListener("change", scaleChanged);
+      resize();
+    };
+    scaleChanged();
     const keyInput = term.onData((data) => {
       const ws = socket.current;
       if (ws?.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current)) ws.send(JSON.stringify({ type: "input", data }));
@@ -212,8 +258,8 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
                 setOwner(owns);
                 setAvailable(message.available === true);
                 setControlReason(message.reason || "");
+                if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols! >= 1 && message.cols! <= 1000 && message.rows! >= 1 && message.rows! <= 1000) term.resize(message.cols!, message.rows!);
                 if (owns) resize();
-                else if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols! >= 1 && message.cols! <= 1000 && message.rows! >= 1 && message.rows! <= 1000) term.resize(message.cols!, message.rows!);
                 // A deliberate click during initial replay can precede the
                 // first availability frame. Retain that intent, never text.
                 if (owns || message.available !== true) claimIntent.current = false;
@@ -251,7 +297,15 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     return () => {
       disposed = true;
       clearTimeout(retry);
+      cancelAnimationFrame(layoutFrame);
       observer.disconnect();
+      resized.dispose();
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("focus", resize);
+      window.visualViewport?.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", resize);
+      document.fonts?.removeEventListener("loadingdone", resize);
+      scale?.removeEventListener("change", scaleChanged);
       keyInput.dispose();
       selection.dispose();
       const ws = socket.current;
@@ -260,6 +314,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       terminal.current = null;
       term.dispose();
       connect.current = () => {};
+      refit.current = () => {};
       copySelection.current = () => {};
       pasteClipboard.current = () => {};
     };
@@ -270,6 +325,13 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     // would discard selection/history and release the user's writer lease.
     if (terminal.current) terminal.current.options.theme = terminalTheme(appearance);
   }, [appearance]);
+
+  useEffect(() => {
+    if (terminal.current) {
+      terminal.current.options.fontSize = fontSize;
+      refit.current();
+    }
+  }, [fontSize]);
 
   useEffect(() => {
     terminal.current?.textarea?.setAttribute("aria-label", `${label} input`);
@@ -307,16 +369,24 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     }
   }, [writable]);
 
-  return <div className="terminal-shell">
+  return <div className="terminal-shell" data-terminal-cols={geometry.cols} data-terminal-rows={geometry.rows}>
     <div className="terminal-toolbar">
       <span className={`terminal-link ${active ? "live" : ""}`}>{active && exclusive ? owner ? <Keyboard size={12} /> : <Eye size={12} /> : <span className="status-dot" />}{finished ? "Saved output" : active ? exclusive ? owner ? "Controlling" : "Watching" : "Connected" : link === "connecting" && enabled ? "Connecting…" : "Disconnected"}</span>
-      <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || "Ctrl+V paste · Ctrl+C copy selection / interrupt" : note || "Input is paused"}</span>
+      <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || controlReason || "Ctrl+V paste · Ctrl+C copy selection / interrupt" : note || "Input is paused"}</span>
       <button className="text-button" disabled={!selected} onClick={() => copySelection.current()} aria-label="Copy terminal selection" title="Copy selection (Ctrl+C or Ctrl+Shift+C)"><Copy size={13} /> Copy</button>
       {!finished && <button className="text-button" disabled={!writable} onClick={() => pasteClipboard.current()} aria-label="Paste text into terminal" title="Paste text (Ctrl+V or Ctrl+Shift+V). Ctrl+Alt+V sends a literal Ctrl+V."><ClipboardPaste size={13} /> Paste</button>}
       {active && exclusive && <button ref={controlButton} className="text-button" disabled={!owner && !available} onClick={() => owner ? socket.current?.send(JSON.stringify({ type: "release" })) : claim()}>{owner ? "Release control" : "Take control"}</button>}
       {!active && enabled && !finished && <button className="text-button" onClick={() => connect.current()} aria-label="Reconnect terminal"><RotateCw size={13} /> Reconnect</button>}
     </div>
-    <div ref={container} className="terminal-canvas" role="region" aria-label={label} onFocus={claim} onBlur={() => { claimIntent.current = false; }} onPointerDown={(event) => { if (event.button === 0 && !finished) { claim(); terminal.current?.focus(); } }} />
+    <div className="terminal-canvas" role="region" aria-label={label} onFocus={claim} onBlur={() => { claimIntent.current = false; }} onPointerDown={(event) => { if (event.button === 0 && !finished) { claim(); terminal.current?.focus(); } }}><div ref={container} className="terminal-mount" /></div>
+    <div className="terminal-display-toolbar">
+      <span className="terminal-dimensions" role="status" aria-label="Terminal dimensions" title="Columns × rows of this terminal">{geometry.cols} × {geometry.rows}</span>
+      <div className="terminal-font-controls" role="group" aria-label="Terminal font size">
+        <button type="button" aria-label="Decrease terminal font size" title="Smaller text (Ctrl+−)" disabled={fontSize <= MIN_TERMINAL_FONT_SIZE} onClick={() => setTerminalFontSize(fontSize - 1)}><Minus size={13} /></button>
+        <button type="button" className="terminal-font-reset" aria-label="Reset terminal font size" title="Reset text size (Ctrl+0)" onClick={() => setTerminalFontSize(DEFAULT_TERMINAL_FONT_SIZE)}>{fontSize}px</button>
+        <button type="button" aria-label="Increase terminal font size" title="Larger text (Ctrl++)" disabled={fontSize >= MAX_TERMINAL_FONT_SIZE} onClick={() => setTerminalFontSize(fontSize + 1)}><Plus size={13} /></button>
+      </div>
+    </div>
     {!finished &&
       <div className="terminal-keys" aria-label="Terminal keys">
         {[{ label: "Esc", value: "\u001b" }, { label: "Tab", value: "\t" }, { label: "Ctrl C", value: "\u0003" }].map((key) => <button key={key.label} disabled={!writable} onClick={() => send(key.value)}>{key.label}</button>)}

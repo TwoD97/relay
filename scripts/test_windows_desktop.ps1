@@ -28,6 +28,8 @@ param(
     [switch]$FrameOnly,
     # Isolated native launch/default resources only; no SSH, mouse, keys or clipboard.
     [switch]$LaunchOnly,
+    # SSH/PTY rendering and resize checks without physical mouse or clipboard.
+    [switch]$RenderingOnly,
     # Enable only with a disposable account clipboard. This replaces clipboard
     # contents with fixture text; private clipboard contents are never captured.
     [switch]$Clipboard
@@ -46,10 +48,14 @@ public static class RelayWindowProbe {
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
   public delegate bool WindowCallback(IntPtr hwnd, IntPtr parameter);
   [DllImport("user32.dll")] public static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, WindowCallback callback, IntPtr parameter);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
@@ -80,6 +86,31 @@ public static class RelayWindowProbe {
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, uint attribute, out int value, int size);
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
+  public sealed class Geometry {
+    public int Width, Height;
+    public uint DPI;
+    public Rect[] Views;
+  }
+  public static Geometry FrameGeometry(IntPtr hwnd) {
+    // Query physical pixels without changing the user's monitor settings.
+    IntPtr previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
+    try {
+      Rect client; Point origin = new Point();
+      if (!GetClientRect(hwnd, out client) || !ClientToScreen(hwnd, ref origin)) return null;
+      var views = new System.Collections.Generic.List<Rect>();
+      EnumChildWindows(hwnd, (child, ignored) => {
+        var name = new StringBuilder(256); GetClassName(child, name, name.Capacity);
+        Rect bounds;
+        if (GetParent(child) == hwnd && name.ToString() == "WRY_WEBVIEW" && GetWindowRect(child, out bounds)) {
+          bounds.Left -= origin.X; bounds.Right -= origin.X;
+          bounds.Top -= origin.Y; bounds.Bottom -= origin.Y;
+          views.Add(bounds);
+        }
+        return true;
+      }, IntPtr.Zero);
+      return new Geometry { Width=client.Right-client.Left, Height=client.Bottom-client.Top, DPI=GetDpiForWindow(hwnd), Views=views.ToArray() };
+    } finally { if (previous != IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
+  }
   public static IntPtr MainFrame(int processId) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((window, parameter) => {
@@ -480,6 +511,7 @@ if (!window.relayFrameTrace) {
   const toggle=document.getElementById('app-menu-toggle');
   if(toggle) new MutationObserver(() => record('expanded', null)).observe(toggle,{attributes:true,attributeFilter:['aria-expanded']});
 }
+
 '@)
                 }
                 return $true
@@ -487,6 +519,109 @@ if (!window.relayFrameTrace) {
         } catch { }
     }
     return $false
+}
+
+function Wait-NativeGeometry([string]$Label) {
+    return Wait-Until {
+        $geometry = [RelayWindowProbe]::FrameGeometry($script:NativeIdentity.Window)
+        if (-not $geometry -or $geometry.Views.Length -ne 3 -or $geometry.DPI -eq 0) { return $false }
+        $scale = $geometry.DPI / 96.0
+        $header = [int][Math]::Round(40 * $scale, [MidpointRounding]::AwayFromZero)
+        $main = @($geometry.Views | Where-Object { $_.Left -eq 0 -and $_.Top -eq $header -and $_.Right -eq $geometry.Width -and $_.Bottom -eq $geometry.Height })
+        $chrome = @($geometry.Views | Where-Object { $_.Left -eq 0 -and $_.Top -eq 0 -and $_.Right -eq $geometry.Width -and $_.Bottom -eq $header })
+        if ($main.Count -ne 1 -or $chrome.Count -ne 1) { return $false }
+        if (-not (Select-NativeView 'chrome')) { return $false }
+        $chromeDOM = Execute-JS 'return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio};'
+        if (-not (Select-NativeView 'content')) { return $false }
+        $contentDOM = Execute-JS 'return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio};'
+        # innerWidth/Height are integral CSS pixels; native HWND rectangles
+        # above require exact physical coverage, while DOM rounding allows one
+        # CSS pixel at the current (unchanged) monitor DPI.
+        foreach ($view in @(@{dom=$chromeDOM; height=$header}, @{dom=$contentDOM; height=$geometry.Height-$header})) {
+            if ([Math]::Abs($view.dom.dpr - $scale) -gt 0.01 -or
+                [Math]::Abs($view.dom.width * $scale - $geometry.Width) -gt $scale + 0.1 -or
+                [Math]::Abs($view.dom.height * $scale - $view.height) -gt $scale + 0.1) { return $false }
+        }
+        return [pscustomobject]@{ label=$Label; width=$geometry.Width; height=$geometry.Height; dpi=$geometry.DPI; header=$header; content=$contentDOM; chrome=$chromeDOM }
+    } "exact native frame geometry ($Label)"
+}
+
+function Test-NativeResizeGeometry {
+    $window = $script:NativeIdentity.Window
+    $original = New-Object RelayWindowProbe+Rect
+    Assert-True ([RelayWindowProbe]::GetWindowRect($window, [ref]$original)) 'Could not read owned window size'
+    $records = @()
+    try {
+        foreach ($size in @(@(1003,733), @(1291,863), @(841,641))) {
+            Assert-True ([RelayWindowProbe]::SetWindowPos($window,[IntPtr]::Zero,0,0,$size[0],$size[1],0x0016)) 'Could not resize owned frame'
+            $records += Wait-NativeGeometry ("resize-{0}x{1}" -f $size[0],$size[1])
+        }
+        [void](Wait-Until { Select-NativeView 'chrome' } 'trusted chrome before maximize')
+        Assert-True (Execute-AsyncJS 'const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke("frame_action",{action:"maximize"}).then(()=>done(true),()=>done(false));') 'Trusted maximize failed'
+        [void](Wait-Until { [RelayWindowProbe]::IsZoomed($window) } 'owned frame maximized')
+        $records += Wait-NativeGeometry 'maximized'
+        [void](Wait-Until { Select-NativeView 'chrome' } 'trusted chrome before restore')
+        Assert-True (Execute-AsyncJS 'const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke("frame_action",{action:"maximize"}).then(()=>done(true),()=>done(false));') 'Trusted restore failed'
+        [void](Wait-Until { -not [RelayWindowProbe]::IsZoomed($window) } 'owned frame restored')
+        $records += Wait-NativeGeometry 'restored'
+    } finally {
+        if ([RelayWindowProbe]::IsZoomed($window)) { [void][RelayWindowProbe]::ShowWindow($window, 9) }
+        [void][RelayWindowProbe]::SetWindowPos($window,[IntPtr]::Zero,$original.Left,$original.Top,$original.Right-$original.Left,$original.Bottom-$original.Top,0x0014)
+        [void](Wait-NativeGeometry 'original')
+    }
+    $records | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:Artifacts 'native-frame-geometry.json') -Encoding UTF8
+    Write-Host 'PASS: exact native content/title-bar physical coverage across odd sizes, maximize and restore at the current monitor DPI'
+}
+
+function Test-TerminalResizeRendering {
+    $window = $script:NativeIdentity.Window
+    $original = New-Object RelayWindowProbe+Rect
+    Assert-True ([RelayWindowProbe]::GetWindowRect($window, [ref]$original)) 'Could not read terminal window size'
+    $records = @()
+    try {
+        foreach ($case in @(@{label='1003x733'; width=1003; height=733}, @{label='1291x863'; width=1291; height=863}, @{label='841x641'; width=841; height=641}, @{label='maximized'}, @{label='restored'}, @{label='larger-text'; font='increase'}, @{label='default-text'; font='reset'})) {
+            if ($case.ContainsKey('width')) {
+                Assert-True ([RelayWindowProbe]::SetWindowPos($window,[IntPtr]::Zero,0,0,$case.width,$case.height,0x0016)) 'Could not resize terminal frame'
+            } elseif ($case.ContainsKey('font')) {
+                if ($case.font -eq 'increase') {
+                    1..3 | ForEach-Object { Click-Selector '[aria-label="Increase terminal font size"]' }
+                } else { Click-Selector '[aria-label="Reset terminal font size"]' }
+            } else {
+                [void](Wait-Until { Select-NativeView 'chrome' } 'trusted frame for terminal maximize/restore')
+                Assert-True (Execute-AsyncJS 'const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke("frame_action",{action:"maximize"}).then(()=>done(true),()=>done(false));') 'Could not maximize/restore terminal frame'
+                [void](Wait-Until { [RelayWindowProbe]::IsZoomed($window) -eq ($case.label -eq 'maximized') } 'terminal maximize/restore')
+            }
+            [void](Wait-NativeGeometry ("terminal-" + $case.label))
+            $geometry = Wait-Until {
+                Execute-JS @'
+const shell=document.querySelector('.session-view .terminal-shell');
+const mount=shell?.querySelector('.terminal-mount'), screen=shell?.querySelector('.xterm-screen');
+if(!shell||!mount||!screen)return false;
+const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows);
+if(!cols||!rows)return false;
+const m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect();
+if(!s.width||!s.height||s.left<m.left-1||s.top<m.top-1||s.right>m.right+1||s.bottom>m.bottom+1)return false;
+const scrollbar=shell.querySelector(".xterm-scrollable-element > .scrollbar.vertical")?.getBoundingClientRect().width||0;
+if(m.width-s.width>scrollbar+s.width/cols+2||m.height-s.height>s.height/rows+2)return false;
+if(!shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent.includes(`${cols} \u00d7 ${rows}`))return false;
+return {cols,rows,dpr:devicePixelRatio,mount:{width:m.width,height:m.height},screen:{width:s.width,height:s.height},rowElements:shell.querySelectorAll('.xterm-rows>div').length};
+'@
+            } 'terminal fits its unpadded viewport and reports current dimensions'
+            $marker = 'RELAY_SIZE_' + [Guid]::NewGuid().ToString('N').Substring(0,8)
+            Send-Terminal ("printf '{0} '; stty size" -f $marker)
+            $expected = "$marker $($geometry.rows) $($geometry.cols)"
+            [void](Wait-Until { Terminal-Contains $expected } 'remote PTY geometry equals the displayed terminal dimensions')
+            $geometry | Add-Member NoteProperty label $case.label
+            $records += $geometry
+            Save-NativeWindow $script:NativeIdentity ("native-terminal-" + $case.label + '.png')
+        }
+    } finally {
+        if ([RelayWindowProbe]::IsZoomed($window)) { [void][RelayWindowProbe]::ShowWindow($window, 9) }
+        [void][RelayWindowProbe]::SetWindowPos($window,[IntPtr]::Zero,$original.Left,$original.Top,$original.Right-$original.Left,$original.Bottom-$original.Top,0x0014)
+        [void](Wait-NativeGeometry 'terminal-original')
+    }
+    $records | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:Artifacts 'native-terminal-geometry.json') -Encoding UTF8
+    Write-Host 'PASS: native terminal screen fits the viewport and real remote stty dimensions match after every owned-window resize'
 }
 
 function Click-Selector([string]$Selector) {
@@ -822,6 +957,7 @@ foreach ($binary in @($Desktop, $Controller)) {
 $signature = Get-AuthenticodeSignature -LiteralPath $Driver
 Assert-True ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match 'Microsoft Corporation') 'WebDriver must have a valid Microsoft Authenticode signature'
 Assert-True (-not ($LaunchOnly -and $OverrideBundle)) 'LaunchOnly must use the extracted app default resources'
+Assert-True (-not ($RenderingOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard))) 'RenderingOnly uses SSH and excludes physical-frame and clipboard modes'
 $password = $null
 if (-not ($FrameOnly -or $LaunchOnly)) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($FixtureTarget)) 'Provide a disposable SSH fixture target'
@@ -856,7 +992,8 @@ try {
     $DriverProcess = Start-OwnedProcess $Driver @("--port=$port", '--allowed-ips=127.0.0.1') $TestEnvironment
     [void](Wait-Until { try { (HTTP $DriverHTTP GET "$DriverURL/status").Status -eq 200 } catch { $false } } 'Microsoft Edge WebDriver startup')
     Start-AppSession
-    if (-not $LaunchOnly) { Test-CustomFrame }
+    if (-not ($LaunchOnly -or $RenderingOnly)) { Test-CustomFrame }
+    Test-NativeResizeGeometry
     $launch = Fresh-Launch
     $ControllerIdentity = Controller-Identity $launch.pid
     $Origin = $launch.address
@@ -941,6 +1078,7 @@ try {
     Claim-Terminal
     Assert-True ((API $inputPath POST @{ data="printf 'RELAY_DENIED_INPUT\n'`r" }).Status -eq 409) 'Second client bypassed native writer lease'
     Test-DirectTerminalKeys $remoteSession
+    if ($RenderingOnly) { Test-TerminalResizeRendering }
     if ($Clipboard) { Test-TerminalClipboard }
     else { Write-Host 'SKIP: real Windows clipboard gate requires -Clipboard and a disposable account clipboard' }
     Send-Terminal "printf 'RELAY_%s\n' 'WINDOWS_NATIVE_OK'"
