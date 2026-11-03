@@ -159,10 +159,7 @@ func (s *Server) probe(ctx context.Context, path string, args ...string) (string
 	defer cancel()
 	provider := strings.TrimSuffix(filepath.Base(path), ".exe")
 	data, err := runProbe(ctx, path, args, s.providerEnvironment(provider, path, nil))
-	if err != nil {
-		return "", err
-	}
-	return ansi.Strip(string(data)), nil
+	return ansi.Strip(string(data)), err
 }
 func advertisedFlag(help, flag string) bool {
 	for _, word := range strings.Fields(help) {
@@ -230,16 +227,44 @@ func (s *Server) inspectHarness(ctx context.Context, id string) Harness {
 	if id == "claude" {
 		args = []string{"auth", "status"}
 	}
-	_, err = s.probe(ctx, path, args...)
+	status, err := s.probe(ctx, path, args...)
 	// Auth-status text can contain account details. Never return or log it.
-	if err == nil {
-		yes := true
-		h.Authenticated = &yes
-		h.AuthDetail = "The CLI reports an existing login"
-	} else {
-		h.AuthDetail = "Could not confirm a login. Open the sign-in terminal if needed."
-	}
+	h.Authenticated, h.AuthDetail = harnessAuthentication(id, status, err)
 	return h
+}
+
+func harnessAuthentication(id, output string, err error) (*bool, string) {
+	var status struct {
+		LoggedIn *bool `json:"loggedIn"`
+	}
+	if id == "claude" {
+		// Decode only this boolean, never retain or expose other account fields.
+		if json.Unmarshal([]byte(output), &status) != nil {
+			status.LoggedIn = nil
+		}
+	}
+	if err == nil {
+		if status.LoggedIn != nil && !*status.LoggedIn {
+			return status.LoggedIn, "The CLI reports no active login"
+		}
+		yes := true
+		return &yes, "The CLI reports an existing login"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, "The CLI login check timed out. Open the sign-in terminal to inspect it."
+	}
+	if errors.Is(err, context.Canceled) {
+		return nil, "The CLI login check was interrupted. Check setup again."
+	}
+	var exit *probeExitError
+	if errors.As(err, &exit) {
+		if exit.code == 1 && (id == "codex" || status.LoggedIn != nil && !*status.LoggedIn) {
+			no := false
+			return &no, "The CLI reports no active login"
+		}
+		return nil, fmt.Sprintf("The CLI login check exited with code %d without a verified login status. Open the sign-in terminal to inspect it.", exit.code)
+	}
+	return nil, "Could not run the CLI login check. Open the sign-in terminal to inspect it."
 }
 func (s *Server) harnesses(w http.ResponseWriter, r *http.Request) {
 	s.harnessMu.Lock()

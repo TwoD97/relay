@@ -493,3 +493,35 @@ whether a particular provider subscription accepts a prompt. Existing personal
 hosts, provider credentials, clipboard contents and remote sessions were not
 changed. Physical mixed-monitor DPI transitions and a personal-account Windows
 installer run remain separate from these automated checks.
+
+## Local sign-in diagnostics — 2026-11-03
+
+Desktop version: `0.3.1`.
+
+A reported disabled Mastermind start was traced to an unverified sign-in state.
+Subsequent read-only checks found the installed Windows CLI and the running
+local service reporting a valid login. The original failure was not reproduced;
+this release corrects misleading diagnostics, without claiming a ConPTY fix.
+
+- Local probes preserve the provider's numeric exit status. Claude's structured
+  `loggedIn: false` response is distinguished from a startup failure, timeout,
+  or interrupted check. Account output remains private and is never returned
+  in the API. Mastermind shows the safe failure detail and still requires a
+  confirmed login before enabling Start.
+- Linux race tests passed for local harness/service and controller Mastermind
+  behavior. Native Windows tests passed the same classification cases, actual
+  ConPTY provider exits 0/1/2, probe cancellation, and help-output handling.
+  Go vet passed on both platforms.
+- Fourteen focused desktop/phone checks passed, including unknown-to-signed-in
+  recovery, confirmed sign-out, missing installation, and rejection of a cached
+  signed-in result after a failed fresh status read. TypeScript checking passed.
+- An isolated empty-profile check of Claude Code 2.1.317 returned signed-out
+  status normally using both pipes and ConPTY. No cursor-query hang was observed.
+  These regression checks used disposable provider state and synthetic accounts;
+  no provider login or model request was performed.
+
+Installing the desktop preserves a compatible, already-running local service.
+The new service-side diagnostic takes effect after that service next starts,
+such as after a Windows restart once local sessions have finished. Reopening
+the desktop alone does not replace it. A currently verified login needs no
+service restart, and remote daemons are not affected by this update.

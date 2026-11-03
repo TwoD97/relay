@@ -3,10 +3,19 @@ package localagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
 )
+
+// Process status is safe to expose; provider output may contain account details.
+type probeExitError struct{ code int }
+
+func (e *probeExitError) Error() string {
+	return fmt.Sprintf("provider command exited with code %d", e.code)
+}
+func (e *probeExitError) ExitCode() int { return e.code }
 
 func runProbe(ctx context.Context, path string, args []string, env []string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
@@ -79,7 +88,7 @@ func runProbe(ctx context.Context, path string, args []string, env []string) ([]
 		return nil, resultValue.err
 	}
 	if resultValue.code != 0 {
-		return output, errors.New("provider command failed")
+		return output, &probeExitError{code: resultValue.code}
 	}
 	return output, nil
 }

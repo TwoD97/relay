@@ -45,6 +45,11 @@ func providerFixture() int {
 		}
 	}
 	if len(os.Args) > 2 && (os.Args[1] == "auth" || os.Args[1] == "login") && os.Args[2] == "status" {
+		if v := os.Getenv("LOCALAGENT_AUTH_FIXTURE"); v != "" {
+			code, _ := strconv.Atoi(v)
+			fmt.Printf("{\"loggedIn\":%t,\"email\":\"private-fixture-account\"}\n", code == 0)
+			return code
+		}
 		return 0
 	}
 	fmt.Println("READY", os.Getpid())
