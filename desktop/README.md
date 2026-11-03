@@ -215,8 +215,9 @@ loading/error pages. The title bar and application menu are separate webviews
 that load only immutable bundled assets. Their single `frame_action` command
 accepts a fixed action enum and independently verifies the calling webview label
 and exact local URL. Its explicit capability matches only `chrome` and
-`app-menu`; the controller webview has no native capabilities and cannot
-navigate to either privileged page. The frame assets prohibit embedded frames
+`app-menu`; the controller webview has no frame-action capability and cannot
+navigate to either privileged page. Its separate appearance, sidebar preference,
+and session-window commands validate the current controller origin. The frame assets prohibit embedded frames
 and external scripts through CSP. Popup windows are denied everywhere, and no
 global Tauri API is exposed. Native hidden menu entries retain keyboard
 accelerators without drawing a system menu bar. The pinned Tauri `unstable`
