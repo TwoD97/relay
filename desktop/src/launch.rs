@@ -292,6 +292,13 @@ pub fn same_origin(address: &Url, candidate: &Url) -> bool {
     is_loopback(candidate) && address.origin() == candidate.origin()
 }
 
+// WebKit reports srcdoc iframe loads through the native navigation filter.
+// The canvas is sanitized, script-free and sandboxed without any allowances.
+// This URL is a document navigation target only, never an authorized IPC origin.
+pub fn is_canvas_document(url: &Url) -> bool {
+    url.as_str() == "about:srcdoc"
+}
+
 pub fn is_shell_page(url: &Url) -> bool {
     matches!(
         (url.scheme(), url.host_str()),
@@ -308,6 +315,30 @@ pub fn is_shell_page(url: &Url) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn canvas_navigation_accepts_only_the_exact_inert_document_url() {
+        assert!(is_canvas_document(&Url::parse("about:srcdoc").unwrap()));
+        for candidate in [
+            "about:blank",
+            "about:srcdoc#fragment",
+            "about:srcdoc?script=1",
+            "data:text/html,hello",
+            "javascript:void(0)",
+            "https://example.com/",
+        ] {
+            assert!(!is_canvas_document(&Url::parse(candidate).unwrap()));
+        }
+        let origin = Url::parse("http://127.0.0.1:1234/").unwrap();
+        let canvas = Url::parse("about:srcdoc").unwrap();
+        assert!(!same_origin(&origin, &canvas));
+        assert!(!is_shell_page(&canvas));
+        assert!(!crate::session_window::authorized(
+            "main",
+            &canvas,
+            Some(&origin)
+        ));
+    }
 
     fn response(url: &str, address: &str) -> Vec<u8> {
         serde_json::to_vec(

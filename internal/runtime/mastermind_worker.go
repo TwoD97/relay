@@ -257,6 +257,19 @@ func RunMastermindWorker(ctx context.Context, stateDir string, launch Mastermind
 	}
 	env := setEnv(s.environment(), "RELAY_AGENT_MODE", launch.AgentMode)
 	args := append([]string{provider}, sessionAgentArguments(launch.Harness, launch.AgentMode, true, nil)...)
+	if os.Getenv("RELAY_CONTROLLER_STATE") != "" || os.Getenv("RELAY_AGENT_CAPABILITY_FILE") != "" {
+		environment := map[string]string{}
+		for _, key := range []string{"RELAY_CONTROLLER_STATE", "RELAY_AGENT_CAPABILITY_FILE", "RELAY_BIN"} {
+			environment[key] = os.Getenv(key)
+		}
+		if err := validateMastermindEnvironment(launch.LaunchID, environment); err != nil {
+			return err
+		}
+		for key, value := range environment {
+			env = setEnv(env, key, value)
+		}
+		args = append([]string{provider}, localMastermindArguments(launch.Harness, launch.AgentMode, nil)...)
+	}
 	if out != nil {
 		fmt.Fprintln(out, "Relay Mastermind: your coordinator is starting. Existing sessions stay running. Permission requests appear in this terminal.")
 		if launch.AgentMode == "auto" {

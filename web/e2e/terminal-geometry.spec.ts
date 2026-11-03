@@ -49,6 +49,7 @@ test("a controlling grid fits every cell inside the padded terminal at narrow an
   for (const size of [{ width: 1280, height: 900 }, { width: 730, height: 520 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(size);
     await expectGridFits(page);
+    await expect.poll(async () => { const box = await geometry(page); return box.availableBottom - box.bottom < box.height / box.rows + 1; }).toBe(true);
     const resize = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!;
     expect(resize.cols).toBeGreaterThan(10);
     expect(resize.rows).toBeGreaterThan(5);
@@ -290,7 +291,7 @@ test("a rejected resize keeps confirmed geometry without resending forever", asy
 
 test("an extreme viewport and minimum font stay within the runtime resize limits", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("relay.terminal.fontSize.v1", "10"));
-  await page.setViewportSize({ width: 5000, height: 4200 });
+  await page.setViewportSize({ width: 5000, height: 4500 });
   const fixture = await mockFleet(page, { terminalOutput: "LARGE_CANVAS" });
   await page.goto(route);
   await page.getByRole("button", { name: "Take control", exact: true }).click();
@@ -301,5 +302,45 @@ test("an extreme viewport and minimum font stay within the runtime resize limits
   await expectGridFits(page);
   await expect(page.locator(".xterm-rows")).toContainText("LARGE_CANVAS");
   expect(fixture.terminalMessages.filter((message) => message.type === "resize").every((message) => message.cols! >= 2 && message.cols! <= 500 && message.rows! >= 2 && message.rows! <= 300)).toBe(true);
+  expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
+});
+
+test("the Mastermind dock fills a wide nested panel and follows full-window resize without remount", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const fixture = await mockFleet(page, { terminalOutput: "DOCK_PRESERVED", terminalGeometry: { cols: 8, rows: 14 }, sessionModes: { codex: ["manual", "auto"] } });
+  Object.assign(fixture.mastermind, { revision: 1, enabled: true, config: { hostId: "dev", harness: "codex", agentMode: "manual", cwd: "/home/dev/projects/relay" } });
+  fixture.attachMastermind();
+  await page.goto("/#mastermind");
+  await expect(page.locator(".xterm-rows")).toContainText("DOCK_PRESERVED");
+  await expect(page.getByRole("status", { name: "Terminal dimensions" })).toHaveText("8 × 14");
+  expect(fixture.terminalMessages).toEqual([]);
+  await page.getByRole("button", { name: "Take control", exact: true }).click();
+  await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
+  const original = await page.locator(".xterm").elementHandle();
+  const fills = async () => {
+    await expect.poll(async () => page.locator(".terminal-mount").evaluate((mount) => {
+      const screen = mount.querySelector(".xterm-screen")!.getBoundingClientRect();
+      const rows = mount.querySelectorAll(".xterm-rows > div").length;
+      const shell = mount.closest(".terminal-shell")!;
+      const cols = Number(shell.getAttribute("data-terminal-cols"));
+      const actual = mount.getBoundingClientRect();
+      const canvas = mount.parentElement!;
+      const style = getComputedStyle(canvas);
+      const contentWidth = canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const contentHeight = canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      return { mountCurrent: Math.abs(actual.width - contentWidth) < 1 && Math.abs(actual.height - contentHeight) < 1, wide: cols > 80, maxColumns: actual.width - screen.width < screen.width / cols + 16, maxRows: actual.height - screen.height < screen.height / rows + 1, fits: screen.height <= actual.height + 1 };
+    })).toEqual({ mountCurrent: true, wide: true, maxColumns: true, maxRows: true, fits: true });
+    const current = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!;
+    fixture.sendTerminalOutput(`\u001b[2J\u001b[${current.rows};${current.cols! - 3}HEDGE`);
+    await expect(page.locator(".xterm-rows > div").last()).toContainText("EDGE");
+  };
+  await fills();
+  await page.getByRole("button", { name: "Expand terminal to full window", exact: true }).click();
+  await expect(page).toHaveURL(/#mastermind\/window$/);
+  await fills();
+  await page.getByRole("button", { name: "Restore workspace layout", exact: true }).click();
+  await fills();
+  expect(await original!.evaluate((element) => element === document.querySelector(".xterm") && element.isConnected)).toBe(true);
+  expect(fixture.attachments).toHaveLength(1);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
 });

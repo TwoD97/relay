@@ -15,6 +15,7 @@ The test never changes HOME, signs into a provider, or calls an inference API.
 import argparse
 import base64
 import contextlib
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -152,9 +153,9 @@ class WebDriver:
             raise RuntimeError(f"WebDriver {value['error']}: {message[:500]}")
         return value
 
-    def start(self, application):
+    def start(self, application, arguments=None):
         result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": {
-            "tauri:options": {"application": str(application)}
+            "tauri:options": {"application": str(application), "args": arguments or []}
         }}})
         self.session = result["sessionId"]
         self.call("POST", "/timeouts", {"script": 10000, "pageLoad": 30000, "implicit": 0})
@@ -278,14 +279,14 @@ class WebDriver:
     def terminal_keys(self, keys):
         # xterm owns this textarea. Clearing/filling its DOM value would bypass
         # terminal editing, so send actual WebDriver key events only.
-        element = self.find("css selector", ".session-view textarea.xterm-helper-textarea")
+        element = self.find("css selector", ".terminal-shell textarea.xterm-helper-textarea")
         self.call("POST", f"/element/{element}/value", {"text": keys, "value": list(keys)})
 
     def terminal_command(self, command):
         self.terminal_keys(command + "\ue007")
 
     def claim_terminal(self):
-        self.click_css(".session-view .terminal-canvas")
+        self.click_css(".terminal-shell .terminal-canvas")
         wait_for(lambda: self.body_contains("Controlling"), "terminal click acquires available writer lease")
 
     def check_terminal_keys(self, session):
@@ -338,26 +339,93 @@ class WebDriver:
         require(text == "RELAY_COPY_ME", "Ctrl+C did not copy the selected native terminal text")
         print("PASS: native text clipboard, Ctrl+V paste and Ctrl+C selection copy", flush=True)
 
+    def check_terminal_image_clipboard(self, state, second, session, artifacts):
+        # This method runs only inside the test's private Xvfb display. It never
+        # reads, replaces, or snapshots the user's Windows/Wayland clipboard.
+        pixels = [17, 93, 201, 255, 225, 41, 69, 255,
+                  54, 171, 88, 255, 249, 193, 22, 255]
+        copied = self.async_script("""
+          const done=arguments[arguments.length-1];
+          if(!navigator.clipboard?.write||typeof ClipboardItem==='undefined'){done(false);return;}
+          const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;
+          canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(arguments[0]),2,2),0,0);
+          canvas.toBlob(blob=>{if(!blob){done(false);return;}
+            navigator.clipboard.write([new ClipboardItem({'image/png':blob})]).then(()=>done(true),()=>done(false));
+          },'image/png');
+        """, pixels)
+        require(copied is True, "Native synthetic PNG clipboard write was denied")
+        # If paste accidentally presses Enter, this marker executes. Its exact
+        # text does not appear in the input itself, so terminal echo cannot pass.
+        self.terminal_keys("printf 'RELAY_%s\\n' 'IMAGE_SUBMITTED'; : ")
+        self.terminal_keys("\ue009v\ue000")
+        image_root = state / "images"
+        def saved_image():
+            files = list(image_root.rglob("*.png")) if image_root.exists() else []
+            require(len(files) <= 1, "One paste uploaded more than one fixture image")
+            return files[0] if files else None
+        image = wait_for(saved_image, "clipboard image saved on this terminal's machine", 30)
+        require(not image.is_symlink() and image.resolve().is_relative_to(image_root.resolve()),
+                "Image attachment escaped this test's private storage")
+        raw = image.read_bytes()
+        require(raw.startswith(b"\x89PNG\r\n\x1a\n") and len(raw) <= 10 << 20,
+                "Attachment is not a bounded PNG")
+        require(image.stem == hashlib.sha256(raw).hexdigest(), "Saved image checksum does not match its filename")
+        decoded = self.async_script("""
+          const done=arguments[arguments.length-1];
+          const bytes=Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0));
+          createImageBitmap(new Blob([bytes],{type:'image/png'})).then(image=>{
+            const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+            const context=canvas.getContext('2d');context.drawImage(image,0,0);image.close();
+            done({width:canvas.width,height:canvas.height,pixels:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)});
+          },()=>done(null));
+        """, base64.b64encode(raw).decode())
+        require(decoded == {"width": 2, "height": 2, "pixels": pixels}, "Uploaded image pixels changed")
+        wait_for(lambda: self.terminal_contains(str(image)), "uploaded image path is inserted into the current terminal")
+        require("RELAY_IMAGE_SUBMITTED" not in second.history(session), "Image paste submitted the terminal input")
+        self.screenshot(artifacts / "native-image-attachment.png")
+        self.terminal_keys("\ue009c\ue000")
+        self.terminal_command("printf 'RELAY_%s\\n' 'IMAGE_CANCELLED'")
+        wait_for(lambda: self.terminal_contains("RELAY_IMAGE_CANCELLED"), "terminal remains usable after image paste")
+        require("RELAY_IMAGE_SUBMITTED" not in second.history(session), "Image input was submitted before cancellation")
+        print("PASS: private native PNG clipboard, exact uploaded pixels/checksum, terminal path insertion without Enter", flush=True)
+
     def check_terminal_geometry(self, artifacts):
         original = self.call("GET", "/window/rect")
         records = []
         try:
             for width, height in ((1003, 733), (1191, 863), (841, 641)):
                 self.call("POST", "/window/rect", {"width": width, "height": height})
-                geometry = wait_for(lambda: self.script("""
-                    const shell=document.querySelector('.session-view .terminal-shell');
+                last_geometry = None
+                stable_since = 0
+                def settled_geometry():
+                    nonlocal last_geometry, stable_since
+                    candidate = self.script("""
+                    const shell=document.querySelector('.terminal-shell');
                     const mount=shell?.querySelector('.terminal-mount'), screen=shell?.querySelector('.xterm-screen');
                     if(!shell||!mount||!screen)return false;
                     const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows);
                     if(!cols||!rows)return false;
                     const m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect();
                     window.relayGeometryProbe={cols,rows,dpr:devicePixelRatio,window:{width:innerWidth,height:innerHeight},mount:m.toJSON(),screen:s.toJSON(),status:shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent};
+                    const canvas=mount.parentElement,c=canvas.getBoundingClientRect(),style=getComputedStyle(canvas);
+                    if(m.right>c.right-parseFloat(style.paddingRight)+1||m.bottom>c.bottom-parseFloat(style.paddingBottom)+1||m.left<c.left+parseFloat(style.paddingLeft)-1||m.top<c.top+parseFloat(style.paddingTop)-1)return false;
+                    if(c.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-m.width>2||c.height-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom)-m.height>2)return false;
+                    if(c.right>innerWidth+1)return false;
+                    if(shell.querySelector(".xterm-rows")?.children.length!==rows)return false;
                     if(!s.width||!s.height||s.left<m.left-1||s.top<m.top-1||s.right>m.right+1||s.bottom>m.bottom+1)return false;
                     const scrollbar=shell.querySelector(".xterm-scrollable-element > .scrollbar.vertical")?.getBoundingClientRect().width||0;
                     if(m.width-s.width>scrollbar+s.width/cols+2||m.height-s.height>s.height/rows+2)return false;
                     if(!shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent.includes(`${cols} × ${rows}`))return false;
                     return {cols,rows,dpr:devicePixelRatio,mount:{width:m.width,height:m.height},screen:{width:s.width,height:s.height}};
-                """), "native WebKit terminal fits its current viewport")
+                    """)
+                    # Native frame layout, the ordered PTY resize acknowledgement,
+                    # xterm rendering and React's dimension label settle separately.
+                    # Require a stable complete frame, not one transient valid box.
+                    if not candidate or candidate != last_geometry:
+                        last_geometry, stable_since = candidate, time.monotonic()
+                        return False
+                    return candidate if time.monotonic() - stable_since >= 0.3 else False
+                geometry = wait_for(settled_geometry, "native WebKit terminal fits its current viewport")
                 # The expected dimensions are deliberately absent from the
                 # submitted command; only the real PTY can produce this result.
                 marker = "RELAY_SIZE_" + uuid.uuid4().hex[:8]
@@ -368,7 +436,8 @@ class WebDriver:
                 records.append(geometry)
                 self.screenshot(artifacts / f"native-terminal-{width}x{height}.png")
         except Exception:
-            (artifacts / "native-terminal-geometry-failure.json").write_text(json.dumps(self.script("return window.relayGeometryProbe || null;"), indent=2) + "\n")
+            (artifacts / "native-terminal-geometry-failure.json").write_text(json.dumps(self.script("return {probe:window.relayGeometryProbe || null,text:document.querySelector('.xterm-rows')?.textContent,cols:document.querySelector('.terminal-shell')?.dataset.terminalCols,rows:document.querySelector('.terminal-shell')?.dataset.terminalRows};"), indent=2) + "\n")
+            self.screenshot(artifacts / "native-terminal-geometry-failure.png")
             raise
         finally:
             self.call("POST", "/window/rect", original)
@@ -446,6 +515,123 @@ def launch_handshake(binary, bundle, state, runtime, environment):
     return data
 
 
+def check_detached_terminal(browser, desktop, driver_path, environment, log, second, session, artifacts):
+    """Real independent Tauri process, private profile/bootstrap, same live PTY."""
+    arguments = ["--session-window", "local", session]
+    def spawned_identity():
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                argv = (entry / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+                if argv == [os.fsencode(desktop), *map(os.fsencode, arguments)]:
+                    pid = int(entry.name)
+                    return (pid, process_start_time(pid))
+            except (OSError, ValueError):
+                pass
+        return None
+    child_driver = None
+    child = None
+    spawned = None
+    try:
+        require(browser.async_script("const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('open_session_window',{hostId:'local',sessionId:arguments[0]}).then(()=>done(true),()=>done(false));", session), "Native new-window command failed")
+        spawned = wait_for(spawned_identity, "native command creates an independent desktop process")
+        # The direct command is verified above; a separately owned WebDriver
+        # launches the same literal route so its renderer and writer can be tested.
+        require(process_start_time(spawned[0]) == spawned[1], "Spawned viewer exited immediately")
+        os.kill(spawned[0], signal.SIGTERM)
+        wait_for(lambda: process_start_time(spawned[0]) != spawned[1], "owned command-created viewer exits")
+        spawned = None
+        port, native = available_port(), available_port()
+        require(port != native, "Detached driver ports collided")
+        child_driver = subprocess.Popen([driver_path, '--port', str(port), '--native-port', str(native)], env=environment, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        wait_for(lambda: tcp_ready(port), "detached driver ready")
+        child = WebDriver(port, native)
+        child.start(desktop, arguments)
+        wait_for(lambda: child.script("return location.hash===arguments[0] && !!document.querySelector('.terminal-shell');", f'#host/local/session/{session}/window'), "detached route survives private authentication", 60)
+        wait_for(lambda: child.body_contains('Watching') or child.body_contains('Controlling'), 'detached terminal receives writer state')
+        require(child.body_contains('Watching'), "Detached viewer unexpectedly stole control")
+        require(len(second.json('/api/hosts/local/runtime/sessions')) == 1, "Detached window created another terminal")
+        child.click_css('.terminal-canvas')
+        wait_for(lambda: child.body_contains('Another viewer') or child.body_contains('another viewer'), "detached viewer respects active writer")
+        browser.click_button('Release control')
+        wait_for(lambda: browser.body_contains('Watching'), "parent releases writer")
+        child.click_css('.terminal-canvas')
+        wait_for(lambda: child.body_contains('Controlling'), "detached viewer takes released writer")
+        child.terminal_command("printf 'RELAY_%s\\n' 'DETACHED_INPUT_OK'")
+        wait_for(lambda: 'RELAY_DETACHED_INPUT_OK' in second.history(session), "detached terminal inputs reach the original PTY")
+        detached_artifacts = artifacts / "detached"
+        detached_artifacts.mkdir(exist_ok=True)
+        child.check_terminal_geometry(detached_artifacts)
+        reconnect_marker = uuid.uuid4().hex
+        child.script('window.relayReconnectMarker=arguments[0];', reconnect_marker)
+        content = child.call('GET', '/window')
+        reconnected = False
+        for handle in child.call('GET', '/window/handles'):
+            child.call('POST', '/window', {'handle':handle})
+            if child.call('GET', '/url') == 'tauri://localhost/chrome.html':
+                reconnected = child.async_script("const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('frame_action',{action:'reconnect'}).then(()=>done(true),()=>done(false));")
+                break
+        child.call('POST', '/window', {'handle':content})
+        require(reconnected, 'Detached native reconnect failed')
+        wait_for(lambda: child.script("return window.relayReconnectMarker!==arguments[1] && location.hash===arguments[0] && !!document.querySelector('.terminal-shell') && [...document.querySelectorAll('button')].some(b=>b.textContent==='Take control'&&!b.disabled);", f'#host/local/session/{session}/window', reconnect_marker), 'detached route and available writer survive reconnect', 30)
+        child.claim_terminal()
+        browser.close_window()
+        require(child.body_contains('Controlling'), "Closing main window killed detached viewer")
+        child.terminal_command("printf 'RELAY_%s\\n' 'PARENT_CLOSED_OK'")
+        wait_for(lambda: 'RELAY_PARENT_CLOSED_OK' in second.history(session), "detached viewer continues after parent closure")
+        child.screenshot(artifacts / 'native-detached.png')
+        child.close_window()
+        require(second.json('/api/hosts/local/runtime/sessions')[0]['status']=='running', "Closing detached viewer stopped its PTY")
+        print('PASS: native detached process/profile, authentication route, single-writer transfer and PTY survival after both windows close', flush=True)
+    finally:
+        if child:
+            child.close()
+        stop_process(child_driver)
+        if spawned and process_start_time(spawned[0]) == spawned[1]:
+            os.kill(spawned[0], signal.SIGTERM)
+
+
+def check_local_mastermind(browser, second, state, artifacts):
+    # The disposable codex executable below is an interactive /bin/sh fixture.
+    # Exercise the agent's private CLI capability from its actual PTY; no account
+    # login, provider inference or direct editing of the workspace store.
+    configuration = second.json('/api/mastermind')
+    require(configuration.get('local', {}).get('hostId') == 'local', 'Local Mastermind default is missing')
+    status, _ = second.request('/api/mastermind/config', 'POST', {'revision':configuration['revision'], 'hostId':'local', 'harness':'codex', 'agentMode':'manual', 'cwd':configuration['local']['cwd']})
+    require(status == 202, 'Could not configure the disposable local coordinator')
+    live = wait_for(lambda: (lambda record: record if record.get('status') == 'running' else None)(second.json('/api/mastermind')), 'local Mastermind attaches', 30)
+    browser.call('POST', '/url', {'url':second.origin+'/#mastermind'})
+    wait_for(lambda: browser.terminal_contains('RELAY_LOCAL_COORDINATOR_READY'), 'embedded native Mastermind renderer')
+    browser.claim_terminal()
+    nested = artifacts / 'mastermind'
+    nested.mkdir(exist_ok=True)
+    browser.check_terminal_geometry(nested)
+    cols = browser.script('return Number(document.querySelector(".terminal-shell").dataset.terminalCols);')
+    require(cols > 40, 'Wide Mastermind panel still renders a tiny terminal grid')
+    browser.terminal_command("printf '<h1>Native canvas proof</h1><p>Published from the local coordinator.</p>' > native-plan.html")
+    browser.terminal_command('"$RELAY_BIN" workspace pages create --revision 0 --title "Native plan" --html-file native-plan.html')
+    workspace = wait_for(lambda: (lambda record: record if record.get('revision') == 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
+    browser.terminal_command('"$RELAY_BIN" workspace tasks create --revision 1 --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
+    wait_for(lambda: second.json('/api/mastermind/workspace').get('revision') == 2, 'agent CLI publishes task')
+    wait_for(lambda: browser.script("return [...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='Native plan') && !!document.querySelector('article[aria-label=\"Verify native terminal\"]');"), 'native workspace refreshes pages and tasks')
+    sandbox = wait_for(lambda: browser.script('const frame=document.querySelector("iframe");return frame && {sandbox:frame.getAttribute("sandbox"),srcdoc:frame.getAttribute("srcdoc")};'), 'native HTML canvas loads')
+    require(sandbox and sandbox['sandbox'] == '' and 'Native canvas proof' in sandbox['srcdoc'], 'HTML canvas is missing or unsandboxed')
+    frame = browser.call('POST', '/element', {'using':'css selector', 'value':'iframe'})
+    try:
+        browser.call('POST', '/frame', {'id':frame})
+        wait_for(lambda: browser.script("const h=document.querySelector('h1');return h?.textContent==='Native canvas proof'&&h.getBoundingClientRect().height>0&&document.readyState==='complete';"), 'native sandboxed canvas actually renders its document')
+    finally:
+        browser.call('POST', '/frame', {'id':None})
+    require(len(second.json('/api/hosts/local/runtime/sessions')) == 2, 'Mastermind created duplicate sessions')
+    browser.screenshot(artifacts / 'native-mastermind-workspace.png')
+    status, _ = second.request('/api/mastermind/disable', 'POST', {'revision':live['revision']})
+    require(status == 202, 'Could not pause disposable Mastermind')
+    status, _ = second.request('/api/hosts/local/runtime/sessions/'+live['session']['id'], 'DELETE')
+    require(status == 204, 'Could not remove disposable coordinator')
+    print('PASS: native embedded Mastermind size, local persistent coordinator, private agent CLI, HTML canvas and task dashboard', flush=True)
+
+
 def run(args):
     require(platform.system() == "Linux", "Native smoke currently requires Linux WebKitWebDriver")
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine())
@@ -465,6 +651,11 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix="relay-native-") as directory:
         root = Path(directory)
         state, runtime = root / "ui", root / "rt"
+        fixture_bin = runtime / 'bin'
+        fixture_bin.mkdir(parents=True, mode=0o700)
+        fixture = fixture_bin / 'codex'
+        fixture.write_text('#!/bin/sh\ncase "$1" in\n--version) echo fixture-1; exit 0;;\n--help) echo "[PROMPT] --dangerously-bypass-approvals-and-sandbox"; exit 0;;\nlogin) exit 0;;\nesac\necho RELAY_LOCAL_COORDINATOR_READY\nexec /bin/sh -i\n')
+        fixture.chmod(0o700)
         control_socket = state / "run" / "controller.sock"
         environment = dict(os.environ,
             RELAY_DESKTOP_STATE_DIR=str(state), RELAY_DESKTOP_RUNTIME_DIR=str(runtime),
@@ -544,6 +735,7 @@ def run(args):
                 browser.check_terminal_keys(session)
                 browser.check_terminal_geometry(artifacts)
                 browser.check_terminal_clipboard()
+                browser.check_terminal_image_clipboard(state, second, session, artifacts)
                 browser.terminal_command("printf 'RELAY_%s\\n' 'NATIVE_INPUT_OK'")
                 wait_for(lambda: "RELAY_NATIVE_INPUT_OK" in second.history(session), "native PTY command output")
                 wait_for(lambda: browser.terminal_contains("RELAY_NATIVE_INPUT_OK"), "native terminal paints command output")
@@ -557,7 +749,7 @@ def run(args):
                 browser.screenshot(artifacts / "native-session.png")
                 print("PASS: native session creation, PTY input and cross-client exclusive control", flush=True)
 
-                browser.close_window()
+                check_detached_terminal(browser, desktop, driver_path, environment, log, second, session, artifacts)
                 require(daemon.poll() is None, "Closing the native window stopped the runtime")
                 require(process_start_time(identity[0]) == identity[1], "Closing the native window stopped the controller")
                 current = second.json("/api/hosts/local/runtime/sessions")
@@ -578,6 +770,7 @@ def run(args):
                 wait_for(lambda: "RELAY_REOPEN_INPUT_OK" in second.history(session), "reopened native PTY command output")
                 browser.screenshot(artifacts / "native-reopened.png")
                 print("PASS: native close/reopen preserves controller, runtime, terminal and input", flush=True)
+                check_local_mastermind(browser, second, state, artifacts)
                 status, _ = second.request(f"/api/hosts/local/runtime/sessions/{session}", "DELETE")
                 require(status == 204, "Could not remove test-owned shell session")
             except Exception:

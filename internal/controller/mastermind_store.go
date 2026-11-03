@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/TwoD97/relay/internal/transport"
 )
@@ -43,6 +44,7 @@ type MastermindSession struct {
 }
 
 type MastermindState struct {
+	Local     *MastermindLocal   `json:"local,omitempty"`
 	Revision  uint64             `json:"revision"`
 	Enabled   bool               `json:"enabled"`
 	Config    *MastermindConfig  `json:"config,omitempty"`
@@ -53,6 +55,11 @@ type MastermindState struct {
 	Error     string             `json:"error,omitempty"`
 	Session   *MastermindSession `json:"session,omitempty"`
 	UpdatedAt time.Time          `json:"updatedAt"`
+}
+
+type MastermindLocal struct {
+	HostID string `json:"hostId"`
+	Cwd    string `json:"cwd"`
 }
 
 type mastermindRecord struct {
@@ -100,6 +107,9 @@ func validMastermindConfig(cfg MastermindConfig) error {
 	if cfg.HostID == "" || len(cfg.HostID) > 128 || (cfg.Harness != "claude" && cfg.Harness != "codex") ||
 		(cfg.AgentMode != "manual" && cfg.AgentMode != "auto") || cfg.Cwd == "" {
 		return errors.New("Choose a machine, Claude Code or Codex, a permission mode, and a working folder")
+	}
+	if cfg.HostID == "local" && filepath.IsAbs(cfg.Cwd) && len(cfg.Cwd) <= 4096 && utf8.ValidString(cfg.Cwd) && strings.IndexFunc(cfg.Cwd, unicode.IsControl) < 0 {
+		return nil
 	}
 	return (transport.DirectoryQuery{Path: cfg.Cwd}).Validate()
 }

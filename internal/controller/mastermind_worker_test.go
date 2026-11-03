@@ -127,7 +127,9 @@ func TestMastermindWorkerLegacyLaunchAndLostRepliesNeverRepeat(t *testing.T) {
 					writeError(w, 500, "bad identity")
 					return
 				}
-				want := "exec " + mastermindShellArguments(append([]string{rec.WorkerPath}, mastermindWorkerArgs(rec, "run")...)) + "\r"
+				executable, _ := os.Executable()
+				prefix := []string{"env", "RELAY_CONTROLLER_STATE=" + dir, "RELAY_AGENT_CAPABILITY_FILE=" + filepath.Join(dir, "agent-capabilities", rec.Token+".json"), "RELAY_BIN=" + executable, rec.WorkerPath}
+				want := "exec " + mastermindShellArguments(append(prefix, mastermindWorkerArgs(rec, "run")...)) + "\r"
 				if command != want || r.URL.Path != "/api/sessions/"+rec.Session.ID+"/input" {
 					t.Errorf("unexpected worker input %q", command)
 				}

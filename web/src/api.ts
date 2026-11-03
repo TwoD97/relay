@@ -1,4 +1,4 @@
-import type { AgentMode, Approval, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, MastermindConfig, MastermindState, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
+import type { AgentMode, Approval, RuntimeHealth, DirectoryListing, Harness, HarnessAction, Host, MaintenanceJob, MastermindConfig, MastermindState, MastermindPage, MastermindTask, MastermindWorkspaceMutation, MastermindWorkspaceState, ObserverConfig, ObserverState, ProjectContextReport, Session } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -10,7 +10,7 @@ let bootstrapPending: Promise<{ csrf: string; version: string }> | null = null;
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   headers.set("Accept", "application/json");
-  if (options?.body) headers.set("Content-Type", "application/json");
+  if (options?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (options?.method && options.method !== "GET") {
     if (!csrf) await bootstrap();
     headers.set("X-Relay-CSRF", csrf);
@@ -56,12 +56,21 @@ export function bootstrap() {
 
 export const runtimePath = (host: string, suffix: string) => `/api/hosts/${encodeURIComponent(host)}/runtime/${suffix}`;
 export const hostPath = (host: string, suffix = "") => `/api/hosts/${encodeURIComponent(host)}${suffix ? `/${suffix}` : ""}`;
+export type TerminalImageTarget = { hostId: string; sessionId: string; createdAt: string };
+export type TerminalImage = { path: string; mime: string; bytes: number; sha256: string };
 export const api = {
+  uploadTerminalImage: (target: TerminalImageTarget, image: Blob) => request<TerminalImage>(hostPath(target.hostId, `sessions/${encodeURIComponent(target.sessionId)}/images?${new URLSearchParams({ createdAt: target.createdAt })}`), { method: "POST", headers: { "Content-Type": image.type }, body: image }),
   state: () => request<{ version: string; hosts: Host[]; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState }>("/api/state"),
   mastermind: () => request<MastermindState>("/api/mastermind"),
   configureMastermind: (revision: number, config: MastermindConfig) => request<MastermindState>("/api/mastermind/config", { method: "POST", body: JSON.stringify({ revision, ...config }) }),
   startMastermind: (revision: number) => request<MastermindState>("/api/mastermind/start", { method: "POST", body: JSON.stringify({ revision }) }),
   disableMastermind: (revision: number) => request<MastermindState>("/api/mastermind/disable", { method: "POST", body: JSON.stringify({ revision }) }),
+  mastermindWorkspace: () => request<MastermindWorkspaceState>("/api/mastermind/workspace"),
+  mastermindPage: (id: string, signal?: AbortSignal) => request<MastermindPage>(`/api/mastermind/workspace/pages/${encodeURIComponent(id)}`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : undefined }),
+  saveMastermindPage: (revision: number, value: { title: string; html: string }, id?: string, createId?: string) => request<MastermindWorkspaceMutation>(`/api/mastermind/workspace/pages${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify({ revision, ...value, ...(!id && createId ? { id: createId } : {}) }) }),
+  removeMastermindPage: (revision: number, id: string) => request<MastermindWorkspaceMutation>(`/api/mastermind/workspace/pages/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  saveMastermindTask: (revision: number, value: Pick<MastermindTask, "title" | "detail" | "status" | "hostId" | "sessionId" | "pageId">, id?: string, createId?: string) => request<MastermindWorkspaceMutation>(`/api/mastermind/workspace/tasks${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify({ revision, title: value.title, detail: value.detail, status: value.status, hostId: value.hostId, sessionId: value.sessionId, pageId: value.pageId, ...(!id && createId ? { id: createId } : {}) }) }),
+  removeMastermindTask: (revision: number, id: string) => request<MastermindWorkspaceMutation>(`/api/mastermind/workspace/tasks/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   maintainHarness: (host: string, harness: string, action: "update" | "repair") => request<MaintenanceJob>(hostPath(host, `harnesses/${encodeURIComponent(harness)}/${action}`), { method: "POST" }),
   prepareProjectContext: (host: string, path: string) => request<ProjectContextReport>(hostPath(host, "project-context"), { method: "POST", body: JSON.stringify({ path }), signal: AbortSignal.timeout(190000) }),
   reconnect: () => request<{ queued: number }>("/api/reconnect", { method: "POST" }),
@@ -73,12 +82,14 @@ export const api = {
   refreshSummary: (host: string, session: Session) => request<ObserverState>(runtimePath(host, "observer/refresh"), { method: "POST", body: JSON.stringify({ sessionId: session.id, sessionCreatedAt: session.createdAt }) }),
   sessions: (host: string) => request<Session[]>(runtimePath(host, "sessions")),
   directories: (host: string, path: string, prefix: string, hidden: boolean, signal: AbortSignal) => request<DirectoryListing>(hostPath(host, `directories?${new URLSearchParams({ path, prefix, hidden: String(hidden) })}`), { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) }),
+  health: (host: string) => request<RuntimeHealth>(runtimePath(host, "health")),
   harnesses: (host: string) => request<Harness[]>(runtimePath(host, "harnesses"), { signal: AbortSignal.timeout(15000) }),
   addHost: (data: { name: string; target: string; port: number }) => request<Host>("/api/hosts", { method: "POST", body: JSON.stringify(data) }),
   connect: (host: string) => request(hostPath(host, "connect"), { method: "POST" }),
   disconnect: (host: string) => request(hostPath(host, "disconnect"), { method: "POST" }),
   forget: (host: string) => request(hostPath(host), { method: "DELETE" }),
   createSession: (host: string, data: { title: string; workspace: string; cwd: string; harness: string; agentMode?: AgentMode }) => request<Session>(runtimePath(host, "sessions"), { method: "POST", body: JSON.stringify(data) }),
+  renameSession: (host: string, session: string, title: string) => request<Session>(runtimePath(host, `sessions/${encodeURIComponent(session)}`), { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteSession: (host: string, session: string) => request(runtimePath(host, `sessions/${encodeURIComponent(session)}`), { method: "DELETE" }),
   acknowledgeAttention: (host: string, session: string) => request(runtimePath(host, `sessions/${encodeURIComponent(session)}/attention/ack`), { method: "POST" }),
   harnessAction: (host: string, harness: string, action: HarnessAction, viaController = false) => request<Session>((viaController ? hostPath : runtimePath)(host, `harnesses/${encodeURIComponent(harness)}/${action}`), { method: "POST", ...(viaController ? { signal: AbortSignal.timeout(190000) } : {}) }),

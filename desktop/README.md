@@ -16,9 +16,9 @@ Microsoft account, or Relay account is required. WebView2 must already be
 available; the ZIP's `README.txt` links to Microsoft's runtime download when it
 is missing. Settings remain in the private Windows account directories, so the
 ZIP is an installation-free application, not a roaming archive of credentials
-or hosts. Coding harnesses
-and terminal sessions run on the connected Linux hosts; local Windows PTYs are
-not implemented. Windows SSH supports direct connections, aliases, private keys,
+or hosts. General project terminals run on connected Linux hosts. Mastermind
+also runs locally on Windows through a separate, persistent ConPTY service, with
+its own installed/signed-in harness. Windows SSH supports direct connections, aliases, private keys,
 the Windows OpenSSH agent, passphrases, and passwords. ProxyJump and ProxyCommand
 are not yet supported by the Windows transport.
 
@@ -26,6 +26,9 @@ The window starts or reconnects to a detached local Relay controller. Closing th
 window or choosing **Quit Relay** leaves the controller, SSH connections, and
 terminal sessions running. Reopening the app reconnects to the matching controller.
 Starting the default desktop app again focuses its existing window.
+Use **Open terminal in new window** to open an independent viewer of an existing
+session. Each viewer has its own browser profile and uses the same private
+controller; opening or closing a viewer does not create or terminate a session.
 
 ## Windows updates and saved data
 
@@ -33,7 +36,7 @@ Close the existing Relay window before installing or opening a different build;
 otherwise, single-instance activation focuses the already running copy. Closing
 the window leaves its controller and remote sessions running. Install over the
 existing installation, then open Relay from the Start menu. The desktop package
-version is `0.2.1`; reinstalling that same version may offer **Add/Reinstall**.
+version is `0.3.0`; reinstalling that same version may offer **Add/Reinstall**.
 The bundled runtime has its own build version and the launcher checks it before
 reusing or replacing the local controller.
 
@@ -42,6 +45,8 @@ Installed and portable copies use the same Windows account data:
 | Data | Default location |
 | --- | --- |
 | Saved hosts, Mastermind choice, controller state | `%LOCALAPPDATA%\RelayData\relay-client` |
+| Mastermind pages/tasks | `%LOCALAPPDATA%\RelayData\relay-client\workspace.json` |
+| Local Mastermind service and private harness releases | `%LOCALAPPDATA%\RelayData\relay-client\local-agent` |
 | Appearance preference | `%APPDATA%\dev.relay.desktop\appearance.json` |
 | Embedded WebView2 profile | `%LOCALAPPDATA%\dev.relay.desktop` |
 | SSH configuration, keys, and trusted hosts | The user's `.ssh` directory, or configured SSH paths |
@@ -77,8 +82,18 @@ standard text selection and clipboard shortcuts. In a terminal, Ctrl+V or
 Ctrl+Shift+V pastes text from this computer's clipboard. Ctrl+C copies selected
 terminal text, or sends an interrupt when nothing
 is selected. Ctrl+Shift+C always means copy. The terminal's Copy and Paste
-buttons provide the same actions. Ctrl+Alt+V sends a literal Ctrl+V to a remote
-application that needs that key, including an agent's own image-paste command.
+buttons provide the same actions. A screenshot copied with Snipping Tool can be
+pasted with Ctrl+V: Relay uploads its PNG/JPEG bytes to the selected session's
+machine and inserts a quoted image path without pressing Enter. Add your message,
+then submit it yourself. The **Image** button also accepts a saved PNG/JPEG.
+Images are limited to 10 MiB and 40 megapixels each, with 100 MiB/128 files per
+session. Existing images are retained for conversation references; reaching the
+limit never deletes them. Remote transfers use the established SSH connection
+and do not require restarting its runtime. Remote hosts need `flock`, `stat`,
+`head`, and `sha256sum` for verified private storage. Uploads that cannot be
+confirmed are not repeated. A change of session, focus, input, or writer control
+prevents delayed image-path insertion. Ctrl+Alt+V sends a literal Ctrl+V to the
+remote program; it cannot give that program access to this computer's clipboard.
 
 ## Build
 
@@ -252,6 +267,15 @@ DPI setting, personal profile, or clipboard is changed. Fractional-DPI Rust
 tests and browser engine scale emulation cover deterministic geometry and
 layout; these are separate from physical mixed-monitor testing. The native
 gate measures the monitor's existing DPI and does not claim a monitor transition.
+
+The separate `-LocalMastermindOnly -ProviderFixture C:\fixture\localagent.test.exe`
+gate uses the native `internal/localagent` test executable as a deterministic
+interactive provider. It rejects real provider binaries, seeds only private test
+releases, and exercises ConPTY input, the agent's private workspace CLI, HTML
+pages/tasks, detached viewers, writer leases, and close/reopen preservation.
+It does not log in or call a model. Use the same `-ProviderFixture` with the SSH
+rendering gate to keep the built-in local service isolated from personal provider
+configuration. Both modes use only their own native window and profile.
 
 Pass `-Clipboard` with a disposable Windows account clipboard to additionally
 check native text copy/paste. This replaces clipboard contents with test text

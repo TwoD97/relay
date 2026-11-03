@@ -234,6 +234,7 @@ func TestRealSSH(t *testing.T) {
 	if err != nil || folderListing.Path != "/home/relay" || folderListing.Home != "/home/relay" {
 		t.Fatal("browse with compatible existing runtime and no new artifact", folderListing, err)
 	}
+	realSSHImageRoundtrip(t, ctx, second, session.ID)
 	updated := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin/go"), "build", "-trimpath", "-ldflags", "-X main.version=ssh-integration-updated", "-o", filepath.Join(bundle, name), "../../cmd/relay")
 	updated.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := updated.CombinedOutput(); err != nil {

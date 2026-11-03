@@ -8,7 +8,7 @@ const coordinator: Session = { ...work, id: "coordinator", title: "Mastermind", 
 const configured = (): MastermindState => ({ revision: 3, enabled: true, config, session: structuredClone(coordinator), status: "running", stage: "Mastermind connected", updatedAt: "2026-10-15T08:00:00Z" });
 const region = (page: Page) => page.getByRole("region", { name: "Mastermind", exact: true });
 async function setup(page: Page) {
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await region(page).getByRole("button", { name: "Set up Mastermind", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Set up Mastermind", exact: true });
   await dialog.getByLabel("Machine", { exact: true }).selectOption("dev");
@@ -55,7 +55,8 @@ test("Manual setup attaches one exact persistent coordinator and reload only rea
   expect(fixture.terminalMessages.filter((item) => item.type === "input")).toEqual([]);
   await region(page).getByRole("button", { name: "Open full terminal", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#host/dev/session/${session.id}$`));
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await openNavigation(page);
+  await page.getByRole("complementary", { name: "Fleet navigation" }).getByRole("button", { name: "Mastermind", exact: true }).click();
   await expect(region(page)).toContainText("Watching");
   expect(fixture.mutations).toHaveLength(1);
 });
@@ -111,7 +112,7 @@ test("worker terminal requires exact runtime identity and controller confirmatio
   // values must still fail the exact worker check below.
   Object.assign(fixture.mastermind.session!, { agentMode: "", mastermindId: "" });
   fixture.sessions.dev[0] = { ...session, cwd: "/different/folder" };
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page)).toContainText("does not match a current session");
   expect(fixture.attachments).toEqual([]);
   fixture.sessions.dev[0] = { ...session, createdAt: "2026-10-15T09:00:00Z" };
@@ -135,7 +136,7 @@ test("worker terminal requires exact runtime identity and controller confirmatio
 test("blocked prerequisites offer a setup check and specific actions, never a dead-end Start", async ({ page }) => {
   const state: MastermindState = { ...configured(), session: undefined, status: "blocked", blocker: "harness", stage: "Agent setup needs attention" };
   const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page).getByRole("button", { name: "Start Mastermind", exact: true })).toHaveCount(0);
   await expect(region(page).getByRole("button", { name: "Set up Codex", exact: true })).toBeVisible();
   await region(page).getByRole("button", { name: "Check setup", exact: true }).click();
@@ -155,7 +156,7 @@ test("blocked prerequisites offer a setup check and specific actions, never a de
 test("only a definitively rejected launch offers Retry start", async ({ page }) => {
   const state: MastermindState = { ...configured(), session: undefined, status: "blocked", blocker: "launch", stage: "The launch was rejected before an agent started" };
   const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page).getByRole("button", { name: "Start Mastermind", exact: true })).toHaveCount(0);
   await region(page).getByRole("button", { name: "Retry start", exact: true }).click();
   expect(fixture.mutations.map((item) => item.path)).toEqual(["/api/mastermind/start"]);
@@ -177,7 +178,7 @@ test("setup requires verified sign-in and points to the selected machine's agent
 
 test("settings replace the coordinator without deleting old output; pause and resume keep the same session", async ({ page }) => {
   const fixture = await mockFleet(page, { ...fixtureOptions(), sessions: { dev: [structuredClone(coordinator)] }, mastermind: configured() });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page)).toContainText("Watching");
   await region(page).getByRole("button", { name: "Mastermind settings", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "Mastermind settings", exact: true });
@@ -239,7 +240,7 @@ test("explicit setup rejection can be corrected, while stale revision cannot ove
 
 test("offline and mismatched session identity cannot acquire the coordinator terminal", async ({ page }) => {
   const fixture = await mockFleet(page, { ...fixtureOptions(), hosts: [{ ...remote, status: "disconnected" }], sessions: { dev: [structuredClone(coordinator)] }, mastermind: configured() });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page)).toContainText("Machine offline");
   expect(fixture.attachments).toEqual([]);
   fixture.sessions.dev[0].createdAt = "2026-10-15T09:00:00Z";
@@ -267,7 +268,7 @@ test("Mastermind state advances within the same RFC3339 fractional second", asyn
     Object.assign(state, { revision: 4, status: "starting", stage: "Starting your coordinator", updatedAt: "2026-10-15T08:00:00.9Z" });
     await route.fulfill({ json: state });
   });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await region(page).getByRole("button", { name: "Start Mastermind", exact: true }).click();
   await expect(region(page)).toContainText("Starting your coordinator");
   const session = fixture.attachMastermind();
@@ -291,18 +292,19 @@ test("late setup response does not steal navigation or reopen its dialog", async
   await expect.poll(() => fixture.mutations.length).toBe(1);
   await expect(page).toHaveURL(/#activity$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await openNavigation(page);
+  await page.getByRole("complementary", { name: "Fleet navigation" }).getByRole("button", { name: "Mastermind", exact: true }).click();
   await expect(region(page)).toContainText("Starting your coordinator");
   expect(fixture.mutations).toHaveLength(1);
 });
 
 test("no machines offers setup prerequisites, not a launch or summary opt-in", async ({ page }) => {
   const fixture = await mockFleet(page, { hosts: [], sessions: {} });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await region(page).getByRole("button", { name: "Set up Mastermind", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Set up Mastermind", exact: true });
   await expect(dialog.getByRole("button", { name: "Save and start Mastermind", exact: true })).toBeDisabled();
-  await dialog.getByRole("button", { name: "Connect a machine", exact: true }).click();
+  await dialog.getByRole("button", { name: "Connect another machine", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Connect a machine", exact: true })).toBeVisible();
   expect(fixture.mutations).toEqual([]);
 });
@@ -311,7 +313,7 @@ test("uncertain startup is not offered a restart and finished output needs an ex
   const state = configured();
   state.status = "uncertain"; state.session = undefined; state.stage = "Checking a previous startup";
   const fixture = await mockFleet(page, { ...fixtureOptions(), mastermind: state });
-  await page.goto("/");
+  await page.goto("/#mastermind");
   await expect(region(page)).toContainText("will not launch another coordinator");
   await expect(region(page).getByRole("button", { name: "Start Mastermind", exact: true })).toHaveCount(0);
   const finished: Session = { ...coordinator, status: "exited", exitCode: 0 };

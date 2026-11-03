@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/TwoD97/relay/internal/transport"
 )
@@ -99,11 +100,26 @@ func parseDirectoryQuery(r *http.Request) (transport.DirectoryQuery, error) {
 		return transport.DirectoryQuery{}, errors.New("hidden must be true or false")
 	}
 	query := transport.DirectoryQuery{Path: values.Get("path"), Prefix: values.Get("prefix"), Hidden: hidden == "true"}
+	if r.PathValue("id") == "local" {
+		return query, validateLocalDirectoryQuery(query)
+	}
 	return query, query.Validate()
 }
 
+func validateLocalDirectoryQuery(query transport.DirectoryQuery) error {
+	if filepath.IsAbs(query.Path) && len(query.Path) <= 4096 && utf8.ValidString(query.Path) && !strings.ContainsAny(query.Path, "\x00\r\n") {
+		copy := query
+		copy.Path = "/"
+		if strings.Contains(query.Prefix, `\`) {
+			return errors.New("folder prefix must be a single name")
+		}
+		return copy.Validate()
+	}
+	return query.Validate()
+}
+
 func localDirectories(ctx context.Context, query transport.DirectoryQuery) (transport.DirectoryListing, error) {
-	if err := query.Validate(); err != nil {
+	if err := validateLocalDirectoryQuery(query); err != nil {
 		return transport.DirectoryListing{}, err
 	}
 	home, err := os.UserHomeDir()

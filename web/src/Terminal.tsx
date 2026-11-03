@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { ArrowDown, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Eye, Keyboard, Minus, Plus, RotateCw } from "lucide-react";
-import { websocketURL } from "./api";
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, ImagePlus, CornerDownLeft, Eye, Keyboard, Minus, Plus, RotateCw } from "lucide-react";
+import { api, errorMessage, websocketURL, type TerminalImageTarget } from "./api";
+import { imagePastePath, validateTerminalImage } from "./terminalImages";
 import { useAppearance } from "./appearance";
 import { terminalTheme } from "./terminalTheme";
 import { DEFAULT_TERMINAL_FONT_SIZE, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, setTerminalFontSize, useTerminalFontSize } from "./terminalPreferences";
@@ -10,8 +11,8 @@ import "@xterm/xterm/css/xterm.css";
 
 type LinkState = "connecting" | "connected" | "disconnected";
 
-export default function Terminal({ path, enabled = true, autoReconnect = true, exclusive = true, finished = false, label = "Terminal" }: {
-  path: string; enabled?: boolean; autoReconnect?: boolean; exclusive?: boolean; finished?: boolean; label?: string;
+export default function Terminal({ path, enabled = true, autoReconnect = true, exclusive = true, finished = false, label = "Terminal", imageTarget }: {
+  path: string; enabled?: boolean; autoReconnect?: boolean; exclusive?: boolean; finished?: boolean; label?: string; imageTarget?: TerminalImageTarget;
 }) {
   const { resolved: appearance } = useAppearance();
   const fontSize = useTerminalFontSize();
@@ -27,6 +28,13 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const refit = useRef<() => void>(() => {});
   const copySelection = useRef<() => void>(() => {});
   const pasteClipboard = useRef<() => void>(() => {});
+  const imageTargetRef = useRef(imageTarget);
+  imageTargetRef.current = imageTarget;
+  const imagePicker = useRef<HTMLInputElement>(null);
+  const chooseImage = useRef<() => void>(() => {});
+  const invalidateInput = useRef<() => void>(() => {});
+  const [imageNote, setImageNote] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
   const finishedRef = useRef(finished);
@@ -51,6 +59,12 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     let pendingOutput = 0;
     let generation = 0;
     let controlGeneration = 0;
+    let focusGeneration = 0;
+    let inputGeneration = 0;
+    const userInput = () => { inputGeneration++; };
+    invalidateInput.current = userInput;
+    let imageUploading = false;
+    let readingClipboard = false;
     let layoutFrame = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
     const term = new XTerminal({
@@ -63,6 +77,8 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     term.open(container.current);
     term.textarea?.setAttribute("aria-label", `${label} input`);
     terminal.current = term;
+    term.textarea?.addEventListener("beforeinput", userInput);
+    term.textarea?.addEventListener("compositionstart", userInput);
     const copyText = () => {
       const text = term.getSelection();
       if (!text) return;
@@ -86,28 +102,105 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(fallback);
       else fallback();
     };
-    const pasteText = () => {
+    const targetIdentity = () => JSON.stringify(imageTargetRef.current);
+    const invalidateFocus = () => { focusGeneration++; };
+    term.textarea?.addEventListener("blur", invalidateFocus);
+    window.addEventListener("blur", invalidateFocus);
+    const pasteGuard = () => {
       const ws = socket.current;
-      const pasteGeneration = generation;
-      const pasteControlGeneration = controlGeneration;
-      if (ws?.readyState !== WebSocket.OPEN || !enabledRef.current || finishedRef.current || (exclusive && !ownerRef.current)) return;
+      if (ws?.readyState !== WebSocket.OPEN || !enabledRef.current || finishedRef.current || (exclusive && !ownerRef.current)) return undefined;
+      const captured = { generation, controlGeneration, focusGeneration, inputGeneration, target: targetIdentity() };
+      return (focus = true) => !disposed && generation === captured.generation && controlGeneration === captured.controlGeneration && inputGeneration === captured.inputGeneration && targetIdentity() === captured.target && socket.current === ws && ws.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current) && (!focus || (focusGeneration === captured.focusGeneration && document.activeElement === term.textarea && document.hasFocus()));
+    };
+    const uploadImage = async (blob: Blob, current: (focus?: boolean) => boolean) => {
+      if (!current() || imageUploading) return;
+      const target = imageTargetRef.current;
+      if (!target) { setImageNote("Images can be attached to a running session. Finish connecting to the machine first."); return; }
+      try { validateTerminalImage(blob); } catch (error) { setImageNote(errorMessage(error)); return; }
+      imageUploading = true; setImageBusy(true); setImageNote("Uploading image to this session’s machine…");
+      try {
+        const image = await api.uploadTerminalImage(target, blob);
+        const text = imagePastePath(image, blob);
+        if (!current()) {
+          if (!disposed) setImageNote("Image uploaded. Its path was not pasted because terminal focus, input, or control changed.");
+          return;
+        }
+        term.paste(text);
+        setImageNote("Image path pasted. Add your message and press Enter when ready.");
+      } catch (error) {
+        if (!disposed) setImageNote(`${errorMessage(error)} Nothing was pasted. The upload has not been repeated.`);
+      } finally {
+        imageUploading = false;
+        if (!disposed) setImageBusy(false);
+      }
+    };
+    const pasteText = () => {
+      if (readingClipboard || imageUploading) return;
       term.focus();
-      const current = () => !disposed && generation === pasteGeneration && controlGeneration === pasteControlGeneration && socket.current === ws && ws.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && document.activeElement === term.textarea && document.hasFocus() && (!exclusive || ownerRef.current);
+      const current = pasteGuard();
+      if (!current || !current()) return;
       const fallback = () => {
         if (!current()) return;
-        // WebKit supports native paste after explicit user activation even
-        // when navigator.clipboard is unavailable. xterm owns the paste event.
         let pasted = false;
         try { pasted = document.execCommand("paste"); } catch { /* Report below. */ }
-        if (!pasted) setNote("Clipboard access was denied. Try the system Paste command or Shift+Insert.");
+        if (!pasted) setNote("Clipboard access was denied. Try Shift+Insert, or use Attach image for a saved screenshot.");
       };
-      if (navigator.clipboard?.readText) {
-        void navigator.clipboard.readText().then((text) => {
-          // Never paste delayed clipboard contents into another attach, lease,
-          // or field. xterm preserves the remote bracketed-paste protocol.
-          if (current()) term.paste(text);
-        }).catch(fallback);
-      } else fallback();
+      const textOnly = async () => {
+        if (!current()) return;
+        if (!navigator.clipboard?.readText) { fallback(); return; }
+        try { const text = await navigator.clipboard.readText(); if (current()) { if (text) term.paste(text); else fallback(); } }
+        catch { fallback(); }
+      };
+      readingClipboard = true;
+      void (async () => {
+        if (!navigator.clipboard?.read) { await textOnly(); return; }
+        let items: ClipboardItems;
+        try { items = await navigator.clipboard.read(); }
+        catch { await textOnly(); return; }
+        if (!current()) return;
+        const images = items.filter((item) => item.types.some((type) => type.startsWith("image/")));
+        if (images.length) {
+          if (images.length > 1) { setImageNote("Paste one image at a time."); return; }
+          const item = images[0], type = ["image/png", "image/jpeg"].find((mime) => item.types.includes(mime));
+          if (!type) { setImageNote("Use a PNG or JPEG image. You can choose a saved screenshot with Attach image."); return; }
+          try { await uploadImage(await item.getType(type), current); }
+          catch (error) { if (!disposed) setImageNote(`Could not read the clipboard image: ${errorMessage(error)}`); }
+          return;
+        }
+        const text = items.find((item) => item.types.includes("text/plain"));
+        if (text) {
+          try { const value = await (await text.getType("text/plain")).text(); if (current()) term.paste(value); }
+          catch { await textOnly(); }
+        } else await textOnly();
+      })().finally(() => { readingClipboard = false; });
+    };
+    const pasteEvent = (event: ClipboardEvent) => {
+      if (!event.isTrusted || !event.clipboardData) return;
+      const images = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/"));
+      if (!images.length) { inputGeneration++; return; }
+      event.preventDefault(); event.stopImmediatePropagation();
+      const current = pasteGuard();
+      if (!current || !current()) return;
+      if (images.length > 1) { setImageNote("Paste one image at a time."); return; }
+      const file = images[0].getAsFile();
+      if (file) void uploadImage(file, current);
+    };
+    container.current.addEventListener("paste", pasteEvent, true);
+    chooseImage.current = () => {
+      term.focus();
+      const before = pasteGuard(), picker = imagePicker.current;
+      if (!before || !before() || !picker || imageUploading) return;
+      picker.value = "";
+      picker.onchange = () => {
+        const file = picker.files?.[0]; picker.value = "";
+        if (!file || !before(false)) return;
+        // Choosing a file is a new explicit gesture. The native picker may have
+        // blurred the window; keep its exact session/lease, then focus its input.
+        term.focus();
+        const current = pasteGuard();
+        if (current) void uploadImage(file, current);
+      };
+      picker.click();
     };
     copySelection.current = copyText;
     pasteClipboard.current = pasteText;
@@ -129,7 +222,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       }
       if (key === "v" && event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey) {
         event.preventDefault();
-        if (event.type === "keydown") term.input("\u0016", true);
+        if (event.type === "keydown") { inputGeneration++; term.input("\u0016", true); }
         return false;
       }
       if (event.altKey || event.ctrlKey === event.metaKey || !["c", "v"].includes(key)) return true;
@@ -141,7 +234,19 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     });
     const layout = () => {
       layoutFrame = 0;
-      if (disposed || !container.current || !container.current.getClientRects().length || container.current.clientWidth < 30 || container.current.clientHeight < 30) return;
+      if (disposed || !container.current || !container.current.getClientRects().length) return;
+      const mount = container.current;
+      const canvas = mount.parentElement;
+      if (!canvas) return;
+      const box = getComputedStyle(canvas);
+      const width = canvas.clientWidth - parseFloat(box.paddingLeft) - parseFloat(box.paddingRight);
+      const height = canvas.clientHeight - parseFloat(box.paddingTop) - parseFloat(box.paddingBottom);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width < 30 || height < 30) return;
+      // FitAddon parses computed width/height as numbers. Resolve the actual
+      // canvas content box ourselves so nested flex/percentage layouts never
+      // get interpreted as a literal 100px terminal on an embedded browser.
+      mount.style.width = `${width}px`;
+      mount.style.height = `${height}px`;
       term.refresh(0, term.rows - 1);
       // Observers render at the PTY's canonical geometry. Fitting a narrow
       // viewer would reflow a shared full-screen application incorrectly.
@@ -169,6 +274,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     setGeometry({ cols: term.cols, rows: term.rows });
     const observer = new ResizeObserver(resize);
     observer.observe(container.current);
+    if (container.current.parentElement) observer.observe(container.current.parentElement);
     window.addEventListener("resize", resize);
     window.addEventListener("focus", resize);
     window.visualViewport?.addEventListener("resize", resize);
@@ -185,6 +291,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       resize();
     };
     scaleChanged();
+    const userKey = term.onKey(() => { inputGeneration++; });
     const keyInput = term.onData((data) => {
       const ws = socket.current;
       if (ws?.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current)) ws.send(JSON.stringify({ type: "input", data }));
@@ -306,6 +413,15 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       document.removeEventListener("visibilitychange", resize);
       document.fonts?.removeEventListener("loadingdone", resize);
       scale?.removeEventListener("change", scaleChanged);
+      container.current?.removeEventListener("paste", pasteEvent, true);
+      term.textarea?.removeEventListener("blur", invalidateFocus);
+      window.removeEventListener("blur", invalidateFocus);
+      if (imagePicker.current) imagePicker.current.onchange = null;
+      chooseImage.current = () => {};
+      invalidateInput.current = () => {};
+      term.textarea?.removeEventListener("beforeinput", userInput);
+      term.textarea?.removeEventListener("compositionstart", userInput);
+      userKey.dispose();
       keyInput.dispose();
       selection.dispose();
       const ws = socket.current;
@@ -346,6 +462,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
 
   const send = (data: string) => {
     if (socket.current?.readyState !== WebSocket.OPEN || !enabled || finished || (exclusive && !ownerRef.current)) return false;
+    invalidateInput.current();
     socket.current.send(JSON.stringify({ type: "input", data }));
     return true;
   };
@@ -374,10 +491,13 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       <span className={`terminal-link ${active ? "live" : ""}`}>{active && exclusive ? owner ? <Keyboard size={12} /> : <Eye size={12} /> : <span className="status-dot" />}{finished ? "Saved output" : active ? exclusive ? owner ? "Controlling" : "Watching" : "Connected" : link === "connecting" && enabled ? "Connecting…" : "Disconnected"}</span>
       <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || controlReason || "Ctrl+V paste · Ctrl+C copy selection / interrupt" : note || "Input is paused"}</span>
       <button className="text-button" disabled={!selected} onClick={() => copySelection.current()} aria-label="Copy terminal selection" title="Copy selection (Ctrl+C or Ctrl+Shift+C)"><Copy size={13} /> Copy</button>
-      {!finished && <button className="text-button" disabled={!writable} onClick={() => pasteClipboard.current()} aria-label="Paste text into terminal" title="Paste text (Ctrl+V or Ctrl+Shift+V). Ctrl+Alt+V sends a literal Ctrl+V."><ClipboardPaste size={13} /> Paste</button>}
+      {!finished && <button className="text-button" disabled={!writable} onClick={() => pasteClipboard.current()} aria-label="Paste clipboard into terminal" title="Paste text or a screenshot (Ctrl+V or Ctrl+Shift+V). Ctrl+Alt+V sends a literal Ctrl+V."><ClipboardPaste size={13} /> Paste</button>}
+      {!finished && imageTarget && <button className="text-button" disabled={!writable || imageBusy} onClick={() => chooseImage.current()} aria-label="Attach image" title="Upload a PNG or JPEG to this session’s machine"><ImagePlus size={13} /> Image</button>}
       {active && exclusive && <button ref={controlButton} className="text-button" disabled={!owner && !available} onClick={() => owner ? socket.current?.send(JSON.stringify({ type: "release" })) : claim()}>{owner ? "Release control" : "Take control"}</button>}
       {!active && enabled && !finished && <button className="text-button" onClick={() => connect.current()} aria-label="Reconnect terminal"><RotateCw size={13} /> Reconnect</button>}
     </div>
+    <input ref={imagePicker} type="file" accept="image/png,image/jpeg" hidden aria-label="Choose terminal image" />
+    {imageNote && <div className="terminal-image-notice" role="status">{imageNote}</div>}
     <div className="terminal-canvas" role="region" aria-label={label} onFocus={claim} onBlur={() => { claimIntent.current = false; }} onPointerDown={(event) => { if (event.button === 0 && !finished) { claim(); terminal.current?.focus(); } }}><div ref={container} className="terminal-mount" /></div>
     <div className="terminal-display-toolbar">
       <span className="terminal-dimensions" role="status" aria-label="Terminal dimensions" title="Columns × rows of this terminal">{geometry.cols} × {geometry.rows}</span>

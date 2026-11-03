@@ -19,6 +19,7 @@ h1, h2, h3, p { margin: 0; }
 svg { flex-shrink: 0; }
 .mono, code { font-family: var(--mono); }
 .muted { color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .spin { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 40px; padding: 9px 15px; border: 1px solid transparent; border-radius: 7px; font-size: 12px; font-weight: 650; white-space: nowrap; transition: background .15s, border-color .15s; }
@@ -79,7 +80,10 @@ svg { flex-shrink: 0; }
 .session-tree-dot.session-interrupted { background: var(--warning); }
 .tree-empty { width: 100%; display: flex; align-items: center; gap: 7px; padding: 5px 11px; text-align: left; color: var(--muted); font-size: 11px; }
 .sidebar-empty { padding: 8px 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.attention-pins { margin: -3px 3px 23px; }
+.attention-pins { margin: -3px 3px 23px; height: 145px; display: flex; flex-direction: column; }
+.attention-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.attention-quiet .attention-label { color: var(--muted); }
+.attention-empty { font-size: 11px; line-height: 1.65; color: var(--muted); padding: 11px 10px; }
 .attention-label { display: flex; align-items: center; gap: 6px; color: var(--warning); font-size: 8px; letter-spacing: 1px; padding: 0 5px 9px; }
 .attention-label b { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; }
 .attention-pin { display: flex; flex-direction: column; position: relative; text-align: left; gap: 4px; width: 100%; margin-bottom: 7px; padding: 10px 24px 10px 10px; border: 1px solid var(--warning-line); border-radius: 6px; background: var(--warning-bg); }
@@ -254,6 +258,12 @@ svg { flex-shrink: 0; }
 .session-location { display: flex; gap: 7px; align-items: center; font-size: 10px; color: var(--muted); margin-bottom: 7px; }
 .session-location button { padding: 0; color: var(--text-secondary); }
 .session-heading h1 { font-size: 19px; font-weight: 550; letter-spacing: -.4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-title-line, .session-title-form { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.session-title-line h1 { min-width: 0; }
+.session-title-button { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; cursor: text; }
+.session-title-button:disabled { cursor: default; opacity: 1; }
+.session-title-form input { min-width: 0; width: min(100%, 460px); padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--input); color: var(--text); font: inherit; }
+.session-rename-error { max-width: 680px; font-size: 11px; line-height: 1.5; color: var(--muted); margin: 6px 0 0; }
 .delete-session:hover { color: var(--error); background: var(--error-bg); }
 .session-path { padding: 0 26px 16px; display: flex; align-items: center; gap: 6px; color: var(--muted); font: 10px var(--mono); }
 .session-path > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -288,6 +298,7 @@ svg { flex-shrink: 0; }
 .terminal-link { display: inline-flex; align-items: center; gap: 6px; color: var(--warning-muted); font: 9px var(--mono); white-space: nowrap; }
 .terminal-link.live { color: var(--accent-text); }
 .terminal-hint { color: var(--muted); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.terminal-image-notice { flex-shrink: 0; padding: 7px 17px; border-bottom: 1px solid var(--line); background: var(--toolbar); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .terminal-toolbar .text-button { margin-left: auto; padding: 0; white-space: nowrap; font-size: 10px; }
 .terminal-canvas { flex: 1; min-height: 50px; min-width: 0; padding: 12px 10px 5px 15px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--scrollbar) var(--terminal-bg); }
 .terminal-mount { width: 100%; height: 100%; min-width: 0; }

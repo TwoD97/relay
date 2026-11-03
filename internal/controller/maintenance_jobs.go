@@ -171,7 +171,7 @@ func (s *Server) maintenanceClient(rec maintenanceRecord) (*http.Client, bool, e
 		return nil, false, s.ctx.Err()
 	}
 	if rec.Job.HostID == "local" {
-		if rec.HostTarget != s.config.LocalSocket || s.config.LocalSocket == "" {
+		if rec.HostTarget != s.localMastermindIdentity() || !s.hasLocalMastermind() {
 			return nil, false, errors.New("The local runtime configuration no longer matches this job.")
 		}
 	} else {

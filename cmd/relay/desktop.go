@@ -28,7 +28,7 @@ var errControllerRunning = errors.New("a controller already owns this data direc
 
 type uiOptions struct {
 	Address, StateDir, RuntimeDir, BinaryDir, Executable string
-	Local, NoLoginLink                                   bool
+	Local, LocalMastermind, NoLoginLink                  bool
 }
 
 type controllerInfo struct {
@@ -45,12 +45,13 @@ type desktopLaunch struct {
 
 type controllerHealth struct {
 	controllerInfo
-	Local      bool   `json:"local"`
-	RuntimeDir string `json:"runtimeDir"`
-	StateDir   string `json:"stateDir,omitempty"`
-	Executable string `json:"executable,omitempty"`
-	Handover   int    `json:"handover,omitempty"`
-	Instance   string `json:"instance,omitempty"`
+	Local           bool   `json:"local"`
+	LocalMastermind bool   `json:"localMastermind,omitempty"`
+	RuntimeDir      string `json:"runtimeDir"`
+	StateDir        string `json:"stateDir,omitempty"`
+	Executable      string `json:"executable,omitempty"`
+	Handover        int    `json:"handover,omitempty"`
+	Instance        string `json:"instance,omitempty"`
 }
 
 func parseUIOptions(command string, args []string) (uiOptions, error) {
@@ -73,6 +74,7 @@ func parseUIOptions(command string, args []string) (uiOptions, error) {
 	f.StringVar(&opts.RuntimeDir, "runtime-dir", defaultDir("relay"), "Local runtime data directory")
 	f.StringVar(&opts.BinaryDir, "binaries", filepath.Dir(exe), "Directory with Linux runtime binaries and SHA256SUMS")
 	f.BoolVar(&opts.Local, "local", localRuntimeSupported, "Include this computer's persistent runtime")
+	f.BoolVar(&opts.LocalMastermind, "local-mastermind", !localRuntimeSupported, "Enable the native local Mastermind service")
 	if command == "ui" {
 		f.BoolVar(&opts.NoLoginLink, "no-login-link", false, "Internal desktop controller process; no login link is printed")
 	}
@@ -105,7 +107,8 @@ func parseUIOptions(command string, args []string) (uiOptions, error) {
 
 func controllerControlHandler(app *controller.Server, info controllerInfo, opts uiOptions, shutdown ...func()) http.Handler {
 	mux := http.NewServeMux()
-	health := controllerHealth{controllerInfo: info, Local: opts.Local, RuntimeDir: opts.RuntimeDir, StateDir: opts.StateDir, Executable: opts.Executable}
+	health := controllerHealth{controllerInfo: info, Local: opts.Local, LocalMastermind: opts.LocalMastermind, RuntimeDir: opts.RuntimeDir, StateDir: opts.StateDir, Executable: opts.Executable}
+	mux.Handle("/agent/", app.AgentHandler())
 	var stopping atomic.Bool
 	if len(shutdown) > 0 {
 		health.Handover, health.Instance = 1, rand.Text()
@@ -330,7 +333,7 @@ func startController(ctx context.Context, opts uiOptions) (desktopLaunch, error)
 		return desktopLaunch{}, err
 	}
 	defer null.Close()
-	args := []string{"ui", "--no-login-link", "--listen", opts.Address, "--state-dir", opts.StateDir, "--runtime-dir", opts.RuntimeDir, "--binaries", opts.BinaryDir, "--local=" + strconv.FormatBool(opts.Local)}
+	args := []string{"ui", "--no-login-link", "--listen", opts.Address, "--state-dir", opts.StateDir, "--runtime-dir", opts.RuntimeDir, "--binaries", opts.BinaryDir, "--local=" + strconv.FormatBool(opts.Local), "--local-mastermind=" + strconv.FormatBool(opts.LocalMastermind)}
 	cmd := exec.Command(opts.Executable, args...)
 	cmd.Dir = opts.StateDir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = null, logFile, logFile

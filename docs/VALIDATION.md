@@ -423,3 +423,73 @@ not imply that every hosted desktop test has passed.
 The namespace migration was exercised in isolated state and containers. It did
 not alter any existing personal application installation, saved host profile,
 provider authentication, or live remote daemon.
+
+
+## Local Mastermind, terminal windows and images — 2026-11-03
+
+Desktop version: `0.3.0`. Runtime bundle: `0.3.0-dev.b76488172778`.
+
+- All 432 distinct interface cases passed with no skips: 216 desktop and 216
+  narrow-window cases, including 18 checks against current/verified older real
+  runtimes. After the title editor increased header height, the extreme-viewport
+  fixture was increased from 4200 to 4500 pixels high to actually exercise the
+  300-row cap; exact cap, fit bounds and input-preservation assertions remained.
+- The final extracted Windows app passed its disposable SSH gate: verified host
+  trust/password setup, folder selection, direct keys, terminal/window/font-size
+  geometry against real `stty`, exclusive control, automatic host reconnect and
+  exact session preservation across close/reopen. It used the monitor's existing
+  DPI and neither the physical mouse nor the personal Windows clipboard.
+
+- Go formatting, vet and all 286 top-level race tests passed across eight test
+  packages; eight explicitly opt-in cases were skipped by the default suite.
+  Native SSH and both disposable SSH orchestration suites passed separately.
+  The additional image round trip used an existing authenticated SSH connection,
+  verified immutable bytes/deduplication, and preserved the daemon socket.
+- Native Rust formatting, strict Clippy and all tests passed on Linux (19) and
+  Windows (18). The extracted Windows package uses the default resource lookup
+  and starts without WSL or console windows. Its local coordinator gate verifies
+  actual iframe rendering, image-file transfer, ConPTY input, detached viewers
+  and preserved state across closing/reopening the application.
+- Local Mastermind has a separate native Windows ConPTY service with private
+  named-pipe authentication, explicit account ownership and owned process jobs.
+  Native Windows tests cover concurrent launch, replacement of staged binaries,
+  daemon failure, child cleanup, output preservation and controller reconnect.
+  The workspace CLI was also tested over the actual private Windows pipe.
+- Private workspace tests exercise pages/tasks, revision conflicts, cancellation,
+  corrupt stores, bounded payloads, capability revocation and unknown outcomes.
+  The coordinator bridge uses two real runtimes to check exact host identity,
+  create/read/input/stop, writer conflicts, lost replies and offline denial.
+- Native verified installations tested Claude Code 2.1.317 and Codex 0.166.0 on
+  Linux and Windows with `--version`/`--help` only. Provider login and paid model
+  execution were not part of these automated gates.
+- Renaming changes metadata only. Native Windows and Linux race regressions
+  prove the existing process/history survive and a failed metadata save cannot
+  roll back a concurrent process exit. Browser cases retain the same terminal,
+  writer lease and draft, update navigation labels, support cancellation, and
+  never repeat an uncertain rename automatically.
+- Screenshot tests cover PNG/JPEG data, content validation, bounded private
+  storage, correct host/session/creation time, idempotent publication, unknown
+  transfers and shell-safe path insertion without Enter. Late clipboard/upload
+  replies are discarded after focus, input, ownership, socket or session changes.
+  Linux uses an actual synthetic PNG on a private Xvfb clipboard and verifies
+  saved pixels/checksum. Windows uses a mocked browser clipboard read followed
+  by the real upload and ConPTY path; it does not read or modify the personal
+  Windows clipboard or claim a physical Snipping Tool test.
+- Native Linux checks compare the actual PTY size with the rendered grid in
+  normal, embedded and detached views. The embedded Mastermind reached 84, 105
+  and 65 columns at the tested odd window sizes; the detached terminal reached
+  120×24, 144×31 and 100×19. Readiness requires stable layout, rendered rows and
+  the runtime's ordered dimensions, not an intermediate resize frame.
+- A native visual check exposed WebKit blocking `about:srcdoc` through its
+  navigation filter. Only that exact inert document URL is now allowed after
+  the controller origin is known. Canvas scripts, network access, forms and
+  nested frames remain disabled. Native checks switch into the iframe and
+  assert a visible rendered heading, rather than accepting a `srcdoc` attribute
+  as proof that the page rendered.
+
+These checks use disposable state, hosts and deterministic provider fixtures.
+They validate orchestration and data transfer, not model planning quality or
+whether a particular provider subscription accepts a prompt. Existing personal
+hosts, provider credentials, clipboard contents and remote sessions were not
+changed. Physical mixed-monitor DPI transitions and a personal-account Windows
+installer run remain separate from these automated checks.

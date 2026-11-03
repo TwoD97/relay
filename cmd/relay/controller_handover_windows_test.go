@@ -22,7 +22,11 @@ func TestWindowsLegacyControllerUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	launch := func(binary string) (desktopLaunch, error) {
-		cmd := exec.CommandContext(ctx, binary, "desktop", "--state-dir", dir, "--local=false")
+		args := []string{"desktop", "--state-dir", dir, "--local=false"}
+		if binary == newBinary {
+			args = append(args, "--local-mastermind=false")
+		}
+		cmd := exec.CommandContext(ctx, binary, args...)
 		data, err := cmd.Output()
 		var result desktopLaunch
 		if err == nil {

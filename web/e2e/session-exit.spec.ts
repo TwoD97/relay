@@ -107,7 +107,7 @@ test("double click and a delayed create reply produce one terminal while close i
   await page.goto("/#host/dev/session/session-1");
   await page.getByRole("button", { name: "Open terminal here", exact: true }).click({ clickCount: 2 });
   await expect.poll(() => attempts).toBe(1);
-  await expect(page.getByRole("button", { name: /Open(ing)? terminal/ })).toBeDisabled();
+  await expect(page.getByRole("region", { name: "Finished session actions", exact: true }).getByRole("button", { name: /Open(ing)? terminal/ })).toBeDisabled();
   const close = page.getByRole("button", { name: "Close session", exact: true });
   for (let i = 0; i < await close.count(); i++) await expect(close.nth(i)).toBeDisabled();
   await expect(page).toHaveURL(/#host\/dev\/session\/session-1$/);

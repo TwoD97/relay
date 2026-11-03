@@ -4,6 +4,7 @@ mod appearance;
 mod frame;
 mod launch;
 mod platform;
+mod session_window;
 
 use launch::{is_shell_page, same_origin, Launcher};
 use std::sync::{
@@ -29,6 +30,7 @@ struct DesktopState {
     error_message: Arc<Mutex<Option<String>>>,
     appearance: Arc<Mutex<appearance::Store>>,
     appearance_actions: Arc<Mutex<()>>,
+    session_route: Arc<Mutex<Option<String>>>,
 }
 
 fn main() {
@@ -36,7 +38,14 @@ fn main() {
         .with_target(false)
         .with_writer(std::io::stderr)
         .init();
-    if let Err(error) = run() {
+    let route = match session_window::arguments(std::env::args_os().skip(1).collect()) {
+        Ok(route) => route,
+        Err(error) => {
+            tracing::error!(%error, "Invalid Relay desktop launch");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = run(route) {
         tracing::error!(%error, "Relay desktop could not start");
         #[cfg(target_os = "windows")]
         platform::show_startup_failure();
@@ -44,11 +53,16 @@ fn main() {
     }
 }
 
-fn run() -> tauri::Result<()> {
+fn run(route: Option<String>) -> tauri::Result<()> {
+    let detached = route.is_some();
+    let state = DesktopState::default();
+    *state.session_route.lock().expect("new desktop state") = route;
+    let profile = Arc::new(Mutex::new(session_window::Profile(None)));
+    let setup_profile = profile.clone();
     let mut builder = tauri::Builder::default();
     // Explicitly isolated controller runs use an isolated WebKit data directory
     // in tests. They must never activate or attach to a user's default window.
-    if std::env::var_os("RELAY_DESKTOP_STATE_DIR").is_none() {
+    if !detached && std::env::var_os("RELAY_DESKTOP_STATE_DIR").is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_window("main") {
                 let _ = window.unminimize();
@@ -58,16 +72,21 @@ fn run() -> tauri::Result<()> {
         }));
     }
     builder
-        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance])
-        .manage(DesktopState::default())
-        .setup(|app| {
+        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance, session_window::open_session_window])
+        .manage(state)
+        .setup(move |app| {
+            let owned_profile = session_window::Profile::new(app.handle(), detached)?;
+            let profile_path = owned_profile.0.clone();
+            *setup_profile.lock().expect("desktop profile") = owned_profile;
             appearance::initialize(app.handle());
             let initial_appearance = appearance::initialization_script(app.handle());
             let initial_background = appearance::initial_background(app.handle());
             let state = app.state::<DesktopState>().inner().clone();
             let origin = state.origin.clone();
             let error_message = state.error_message.clone();
-            let content = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let mut content = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
+            if let Some(path) = &profile_path { content = content.data_directory(path.clone()); }
+            let content = content
                 .title("Relay")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(390.0, 500.0)
@@ -86,13 +105,14 @@ fn run() -> tauri::Result<()> {
                                 .lock()
                                 .ok()
                                 .and_then(|origin| {
-                                    origin.as_ref().map(|address| same_origin(address, url))
+                                    origin.as_ref().map(|address| same_origin(address, url) || launch::is_canvas_document(url))
                                 })
                                 .unwrap_or(false)
                     })
                     .on_page_load(move |webview, payload| {
                         if payload.event() == PageLoadEvent::Finished {
                             appearance::page_loaded(webview.as_ref());
+                            session_window::page_loaded(webview.as_ref(), payload.url());
                         }
                         if payload.event() != PageLoadEvent::Finished
                             || !is_shell_page(payload.url())
@@ -115,8 +135,10 @@ fn run() -> tauri::Result<()> {
                     .build()?;
             let window = app.get_window("main").expect("created main window");
             content.as_ref().set_auto_resize(false)?;
+            let mut chrome = WebviewBuilder::new("chrome", WebviewUrl::App("chrome.html".into()));
+            if let Some(path) = &profile_path { chrome = chrome.data_directory(path.clone()); }
             window.add_child(
-                WebviewBuilder::new("chrome", WebviewUrl::App("chrome.html".into()))
+                chrome
                     .initialization_script(&initial_appearance)
                     .background_color(initial_background)
                     .on_navigation(|url| frame::trusted_page("chrome", url))
@@ -131,8 +153,10 @@ fn run() -> tauri::Result<()> {
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(1280.0, frame::HEIGHT),
             )?;
+            let mut menu = WebviewBuilder::new("app-menu", WebviewUrl::App("menu.html".into()));
+            if let Some(path) = &profile_path { menu = menu.data_directory(path.clone()); }
             let menu_view = window.add_child(
-                WebviewBuilder::new("app-menu", WebviewUrl::App("menu.html".into()))
+                menu
                     .initialization_script(&initial_appearance)
                     .background_color(initial_background)
                     .on_navigation(|url| frame::trusted_page("app-menu", url))
@@ -219,7 +243,7 @@ fn run() -> tauri::Result<()> {
             "quit" => app.exit(0),
             _ => {}
         })
-        // The controller may change appearance only. Immutable bundled chrome
+        // The controller may change appearance or open a validated session. Bundled chrome
         // alone can invoke the independently checked frame command.
         // Closing the window leaves controllers and terminal sessions running.
         .run(tauri::generate_context!())

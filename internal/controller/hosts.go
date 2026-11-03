@@ -106,6 +106,9 @@ func (s *Server) queueConnection(h Host) (bool, error) {
 // no background loop that repeatedly prompts or retries credentials.
 func (s *Server) ReconnectSaved() int {
 	queued := 0
+	if s.queueLocalAgent() {
+		queued++
+	}
 	for _, host := range s.store.list() {
 		if started, err := s.queueConnection(host); err == nil && started {
 			queued++

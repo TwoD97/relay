@@ -55,6 +55,16 @@ func fleetCommand(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected fleet arguments")
 	}
+	provided := map[string]bool{}
+	f.Visit(func(option *flag.Flag) { provided[option.Name] = true })
+	if action == "list" && agentBridgeConfigured() && !provided["socket"] && !provided["fleet"] {
+		data, err := agentRequest("GET", "/agent/fleet", nil)
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(data)
+		return err
+	}
 	dir, err := fleetregistry.DirectoryForSocket(*socket)
 	if err != nil {
 		return err

@@ -93,8 +93,8 @@ func TestWindowsControllerPipeIdentityAndRoundTrip(t *testing.T) {
 
 func TestWindowsControllerRejectsLocalRuntime(t *testing.T) {
 	opts, err := parseUIOptions("desktop", []string{"--state-dir", t.TempDir()})
-	if err != nil || opts.Local {
-		t.Fatalf("Windows default must use SSH hosts: %v", err)
+	if err != nil || opts.Local || !opts.LocalMastermind {
+		t.Fatalf("Windows default must use the native local coordinator, not the Linux runtime: %v", err)
 	}
 	if _, err := parseUIOptions("desktop", []string{"--local=true"}); err == nil {
 		t.Fatal("unsupported Windows PTY silently enabled")
@@ -117,7 +117,7 @@ func TestWindowsConcurrentDesktopLaunchers(t *testing.T) {
 			defer wait.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, binary, "desktop", "--state-dir", dir)
+			cmd := exec.CommandContext(ctx, binary, "desktop", "--state-dir", dir, "--local-mastermind=false")
 			data, err := cmd.Output()
 			var launch desktopLaunch
 			if err == nil {

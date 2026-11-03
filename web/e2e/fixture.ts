@@ -1,15 +1,17 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import type { AgentMode, Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, MastermindState, Session } from "../src/types";
+import type { AgentMode, Approval, ObserverState, Harness, HarnessAction, HarnessId, Host, MaintenanceJob, MastermindState, MastermindWorkspaceState, MastermindPage, Session } from "../src/types";
 
 export const local: Host = { id: "local", name: "This computer", target: "local", port: 0, status: "online", stage: "Local runtime", createdAt: "2026-10-07T08:00:00Z" };
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; terminalGeometry?: { cols: number; rows: number }; deferTerminalControl?: boolean; deferTerminalClaim?: boolean; deferTerminalResize?: boolean } = {}) {
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; workspace?: MastermindWorkspaceState; pages?: MastermindPage[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; terminalGeometry?: { cols: number; rows: number }; deferTerminalControl?: boolean; deferTerminalClaim?: boolean; deferTerminalResize?: boolean } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
   const mastermind: MastermindState = options.mastermind ?? { revision: 0, enabled: false, status: "unconfigured", stage: "Choose your Mastermind", updatedAt: "2026-10-15T08:00:00Z" };
+  const workspace: MastermindWorkspaceState = options.workspace ?? { revision: 0, updatedAt: "2026-11-03T08:00:00Z", pages: [], tasks: [] };
+  const pages = options.pages ?? [];
   const approvals = options.approvals ?? {};
   const observers = options.observers ?? {};
   const mutations: { method: string; path: string; body: unknown; csrf: string | undefined }[] = [];
@@ -47,6 +49,29 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       return json({ queued }, 202);
     }
     if (path === "/api/state") { stateRequests++; return json({ version: "0.1.0-test", hosts, maintenanceJobs, mastermind }); }
+    if (path.startsWith("/api/mastermind/workspace")) {
+      const match = path.match(/^\/api\/mastermind\/workspace\/(pages|tasks)(?:\/([^/]+))?$/);
+      if (!match) return json(workspace);
+      const [, kind, id] = match;
+      const items = kind === "pages" ? pages : workspace.tasks;
+      const existing = items.find((item) => item.id === id);
+      if (method === "GET") return existing ? json({ ...existing, revision: workspace.revision }) : json({ error: "Item unavailable" }, 404);
+      if (body.revision !== workspace.revision) return json({ error: "The workspace changed. Review current content." }, 409);
+      if (method !== "POST" && !existing) return json({ error: "Item unavailable" }, 404);
+      workspace.revision++;
+      workspace.updatedAt = new Date().toISOString();
+      if (method === "DELETE") {
+        items.splice(items.indexOf(existing!), 1);
+        if (kind === "pages") for (const task of workspace.tasks) if (task.pageId === id) delete task.pageId;
+      } else {
+        const item = { ...body, id: id ?? body.id ?? String(workspace.revision).padStart(32, "0"), updatedAt: workspace.updatedAt, ...(kind === "tasks" ? { detail: body.detail ?? "", status: body.status ?? "todo" } : {}) };
+        delete item.revision;
+        if (existing) Object.assign(existing, item); else items.push(item);
+      }
+      workspace.pages = pages.map(({ id, title, updatedAt }) => ({ id, title, updatedAt }));
+      const saved = items.find((item) => item.id === (id ?? body.id ?? String(workspace.revision).padStart(32, "0")));
+      return json({ workspace, ...(method === "DELETE" ? {} : kind === "pages" ? { page: { ...saved, revision: workspace.revision } } : { task: saved }) });
+    }
     if (path === "/api/mastermind" && method === "GET") return json(mastermind);
     if (path.startsWith("/api/mastermind/") && method === "POST") {
       if (body.revision !== mastermind.revision) return json({ error: "Mastermind settings changed. Reload the current state." }, 409);
@@ -131,6 +156,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       observer.summaries = [...observer.summaries.filter((item) => item !== old), { sessionId: session.id, sessionCreatedAt: session.createdAt, provider: "claude", model: observer.config.model, summary: "", steps: [], nextSteps: [], blockers: [], sourceStatus: session.status, stale: false, ...old, status: "queued", updatedAt: new Date().toISOString() }];
       return json(observer, 202);
     }
+    if (suffix === "runtime/health") return json({ protocol: 1, version: "fixture", platform: "linux", capabilities: { mastermindV1: !options.legacyRuntime, localMastermindV1: true } });
     if (suffix === "runtime/harnesses") {
       if (options.hangHarnesses?.includes(hostId)) return;
       const harnesses: Harness[] = [{ id: "shell", name: "Shell", installed: true }, { id: "claude", name: "Claude Code", installed: false }, { id: "codex", name: "Codex", installed: true, version: "codex-cli 1.0.0", authenticated: true }];
@@ -186,7 +212,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     });
   });
   return {
-    hosts, sessions, maintenanceJobs, mastermind, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
+    hosts, sessions, maintenanceJobs, mastermind, workspace, pages, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
     attachMastermind: (execution: "native" | "worker" = "native") => {
       const config = mastermind.config!;
       const session: Session = { id: `mastermind-session-${mastermind.revision}`, title: "Mastermind", workspace: "Relay", cwd: config.cwd, harness: execution === "worker" ? "shell" : config.harness, ...(execution === "native" ? { agentMode: config.agentMode, mastermindId: "0123456789abcdef0123456789abcdef" } : {}), status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };

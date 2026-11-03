@@ -287,3 +287,74 @@ conflicts for the user to resolve; reconnecting does not overwrite them.
 Registration never restarts a runtime or migrates its sessions. Discovery locations
 follow the [Codex skill documentation](https://learn.chatgpt.com/docs/build-skills)
 and [Claude Code skill documentation](https://code.claude.com/docs/en/skills).
+
+## Local Mastermind, workspace and desktop viewers
+
+Mastermind state includes optional `local: {hostId,cwd}` for the device-owned
+default working folder. Windows uses a private named-pipe local-agent service;
+Linux uses its existing persistent runtime. Both advertise `localMastermindV1`.
+The Windows service supports coordinator and provider-setup sessions, not a
+general shell launcher. Its native process starts suspended, joins an owned
+Job Object, then runs in ConPTY. Closing a desktop/controller preserves the
+independent service. A service crash or operating-system restart interrupts
+its jobs and retains output; work is never automatically replayed. Compatible
+live service builds are reused during app updates.
+
+`GET /api/mastermind/workspace` returns `{revision,updatedAt,pages,tasks}`.
+Page summaries contain `{id,title,updatedAt}`; `GET .../pages/{id}` adds `html`
+and the current global `revision`. Tasks contain `{id,title,detail,status,
+pageId?,hostId?,sessionId?,updatedAt}`. Status is `todo|doing|blocked|done`.
+Collections accept POST; exact item paths accept PUT or DELETE. Every mutation
+requires the current global `revision` and returns `{workspace,page?,task?}`.
+DELETE accepts only revision. Stale revisions and duplicate caller-provided
+create IDs return 409. IDs are 32 lowercase hexadecimal characters. The CLI
+generates a create ID before dispatch, allowing an unknown reply to be checked
+without repeating the mutation.
+
+The atomic workspace store permits 16 pages of at most 128 KiB HTML, 200 tasks,
+160-character titles, 4 KiB task details and a 4 MiB total serialized document.
+Deleting a page clears related task page references and preserves the tasks.
+Invalid state is preserved and workspace requests return 503; the rest of Relay
+remains usable. Generated pages are sanitized and rendered with an empty iframe
+sandbox and a restrictive document CSP. No scripts, network assets, navigation,
+forms or native IPC are exposed through a generated page.
+
+Local coordinators receive `RELAY_CONTROLLER_STATE`, `RELAY_BIN`, and a private
+`RELAY_AGENT_CAPABILITY_FILE`, never a browser cookie or authentication URL.
+The private controller IPC listener exposes workspace routes under `/agent/`,
+plus exact fleet/session list, create, history, input and stop operations. It
+accepts a launch-scoped bearer capability and rejects browser Origin, Cookie
+and Fetch Metadata headers. Disabling or replacing the configured coordinator
+revokes that capability. Child remote session requests contain no controller
+credential or environment fields. Ordinary agents keep the existing SSH-based
+coordination path and do not inherit this capability.
+
+`open_session_window({hostId,sessionId})` is a restricted native command for the
+main view at the current controller origin. It launches only Relay itself with
+validated literal identities, a separate browser profile and normal private
+controller authentication. The fixed route survives reconnect. It neither
+creates a terminal nor claims its writer lease. Full-window mode keeps the same
+mounted terminal and WebSocket; detached viewers share the existing runtime's
+single-writer protocol.
+
+### Terminal image transfers
+
+`POST /api/hosts/{id}/sessions/{session}/images?createdAt=<RFC3339Nano>` is an
+authenticated, CSRF-protected controller endpoint. Its body is raw `image/png`
+or `image/jpeg`, limited to 10 MiB and 40 megapixels (32768 pixels per side).
+The controller validates the complete image and verifies the exact running
+session before and after transfer; setup/maintenance processes are excluded.
+At most two transfers run concurrently. A confirmed response contains
+`{path,mime,bytes,sha256}` and never writes terminal input.
+
+Local files are private to the controller account. Remote files are sent over
+the existing authenticated SSH connection into private app-owned image storage,
+without changing or restarting the daemon. Image filenames are content hashes;
+publication is atomic, existing bytes must match, and symlinks/reparse points
+are rejected. Storage is limited to 100 MiB/128 files per session identity.
+Existing references are preserved when the quota is reached. Uncertain writes
+are not automatically replayed. The desktop inserts a quoted path only after a
+confirmed response and only into the same focused session and writer lease;
+intervening input also invalidates delayed insertion. It never sends Enter.
+Clipboard images are read only following an explicit paste action, and a saved
+image can be selected through the native file picker.

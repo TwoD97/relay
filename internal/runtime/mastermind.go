@@ -5,9 +5,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	agentskill "github.com/TwoD97/relay/skills"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // This is a role, not an invented task or a replacement for project policy.
@@ -27,8 +30,34 @@ func sessionAgentArguments(harness, mode string, mastermind bool, base []string)
 	if !mastermind {
 		return agentModeArguments(harness, mode, base)
 	}
+	return mastermindArguments(harness, mode, base, mastermindInstruction)
+}
+
+func localMastermindArguments(harness, mode string, base []string) []string {
+	return mastermindArguments(harness, mode, base, agentskill.MastermindInstruction)
+}
+
+func validateMastermindEnvironment(id string, environment map[string]string) error {
+	if len(environment) == 0 {
+		return nil
+	}
+	if !validMastermindID(id) || len(environment) != 3 {
+		return errors.New("Local Mastermind requires its exact private controller environment")
+	}
+	for _, key := range []string{"RELAY_CONTROLLER_STATE", "RELAY_AGENT_CAPABILITY_FILE", "RELAY_BIN"} {
+		value := environment[key]
+		if !filepath.IsAbs(value) || len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {
+			return errors.New("Invalid local Mastermind environment")
+		}
+	}
+	if filepath.Clean(environment["RELAY_AGENT_CAPABILITY_FILE"]) != filepath.Join(filepath.Clean(environment["RELAY_CONTROLLER_STATE"]), "agent-capabilities", id+".json") {
+		return errors.New("Mastermind capability must belong to this launch")
+	}
+	return nil
+}
+
+func mastermindArguments(harness, mode string, base []string, prompt string) []string {
 	args := append([]string(nil), base...)
-	prompt := mastermindInstruction
 	if mode == "auto" {
 		prompt = autoAgentInstruction + "\n\n" + prompt
 		if harness == "claude" {

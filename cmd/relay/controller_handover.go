@@ -105,6 +105,9 @@ func probeController(ctx context.Context, opts uiOptions) (*controllerProbe, err
 }
 
 func validateControllerConfiguration(health controllerHealth, opts uiOptions) error {
+	if health.Version == version && health.LocalMastermind != opts.LocalMastermind {
+		return errors.New("running controller uses different --local-mastermind settings; use matching settings or a separate --state-dir")
+	}
 	if health.Local != opts.Local || (opts.Local && !sameControllerPath(health.RuntimeDir, opts.RuntimeDir)) {
 		return errors.New("running controller uses different --local or --runtime-dir settings; use matching settings or a separate --state-dir")
 	}

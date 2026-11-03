@@ -21,7 +21,7 @@ test("standard paste shortcuts send clipboard text with bracketed paste, never t
   await page.locator(".terminal-canvas").click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   for (const shortcut of ["Control+v", "Control+Shift+V", "Meta+v"]) await page.keyboard.press(shortcut);
-  await page.getByRole("button", { name: "Paste text into terminal" }).click();
+  await page.getByRole("button", { name: "Paste clipboard into terminal" }).click();
   await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe(`\u001b[200~${text.replace(/\n/g, "\r")}\u001b[201~`.repeat(4));
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
@@ -39,6 +39,7 @@ test("Ctrl+C copies a terminal selection and still interrupts when nothing is se
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   await page.keyboard.press("Control+c");
   await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe("\u0003");
+  await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "resize").length).toBeGreaterThan(0);
   const columns = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!.cols!;
   await selectFirstWord(page, columns, 7);
   await expect(page.getByRole("button", { name: "Copy terminal selection" })).toBeEnabled();
@@ -64,6 +65,7 @@ test("copy fallback selects the exact terminal text without sending input", asyn
   });
   await page.locator(".terminal-canvas").click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
+  await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "resize").length).toBeGreaterThan(0);
   const columns = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!.cols!;
   await selectFirstWord(page, columns, 7);
   await page.keyboard.press("Control+c");
@@ -80,7 +82,7 @@ test("an occupied terminal cannot read or paste clipboard contents", async ({ pa
     state.reads = 0;
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => { state.reads++; return "must not leave this browser"; } } });
   });
-  await expect(page.getByRole("button", { name: "Paste text into terminal" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Paste clipboard into terminal" })).toBeDisabled();
   await page.locator(".terminal-canvas").click();
   await page.keyboard.press("Control+v");
   await page.keyboard.press("Control+Shift+V");
@@ -97,6 +99,7 @@ test("the real browser clipboard supports text paste and copying terminal output
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   await page.keyboard.press("Control+v");
   await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe("clipboard text ✓");
+  await expect.poll(() => fixture.terminalMessages.filter((message) => message.type === "resize").length).toBeGreaterThan(0);
   const columns = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!.cols!;
   await selectFirstWord(page, columns, 7);
   await page.keyboard.press("Control+c");

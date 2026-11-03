@@ -16,11 +16,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TwoD97/relay/internal/localagent"
 	"github.com/TwoD97/relay/internal/transport"
 )
 
 type Config struct {
+	EnsureLocalAgent                                   func(context.Context) error
 	StateDir, BinaryDir, Version, Address, LocalSocket string
+	LocalAgentDir, LocalAgentError                     string
 	Assets                                             fs.FS
 	startConnection                                    func(context.Context, transport.Config) (*transport.Connection, error)
 }
@@ -33,6 +36,9 @@ type link struct {
 }
 
 type Server struct {
+	imageSlots                      chan struct{}
+	localAgentConnecting            bool
+	localAgentError                 string
 	config                          Config
 	store                           *hostStore
 	ctx                             context.Context
@@ -54,6 +60,7 @@ type Server struct {
 	maintenanceWG                   sync.WaitGroup
 	fleet                           *fleetPublisher
 	mastermind                      *mastermindStore
+	workspace                       *workspaceStore
 	mastermindWake                  chan struct{}
 	mastermindWG                    sync.WaitGroup
 }
@@ -82,9 +89,13 @@ func New(cfg Config) (*Server, error) {
 		mastermind = unavailableMastermindStore(cfg.StateDir)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
+	s := &Server{imageSlots: make(chan struct{}, 2), localAgentError: cfg.LocalAgentError, config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
 	s.maintenance = maintenance
 	s.mastermind, s.mastermindWake = mastermind, make(chan struct{}, 1)
+	_ = s.initializeWorkspace()
+	if s.hasLocalMastermind() {
+		_ = s.initializeMastermindProject()
+	}
 	s.fleet, err = newFleetPublisher(s)
 	if err != nil {
 		cancel()
@@ -103,11 +114,17 @@ func New(cfg Config) (*Server, error) {
 			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "unix", cfg.LocalSocket)
 		})
 	}
+	if cfg.LocalAgentDir != "" {
+		s.links["local"] = s.makeProxy(func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return localagent.DialContext(ctx, cfg.LocalAgentDir)
+		})
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/bootstrap", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"csrf": s.csrf, "version": cfg.Version})
 	})
 	mux.HandleFunc("GET /api/state", s.state)
+	s.RegisterWorkspaceRoutes(mux)
 	mux.HandleFunc("GET /api/mastermind", s.getMastermind)
 	mux.HandleFunc("POST /api/mastermind/config", s.configureMastermind)
 	mux.HandleFunc("POST /api/mastermind/start", s.startMastermind)
@@ -122,6 +139,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("DELETE /api/hosts/{id}", s.forgetHost)
 	mux.HandleFunc("GET /api/hosts/{id}/setup-terminal", s.setupTerminal)
 	mux.HandleFunc("GET /api/hosts/{id}/directories", s.directories)
+	mux.HandleFunc("POST /api/hosts/{id}/sessions/{session}/images", s.uploadImage)
 	mux.HandleFunc("/api/hosts/{id}/runtime/{route...}", s.runtimeProxy)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "Unknown API endpoint") })
 	if cfg.Assets != nil {
@@ -183,10 +201,21 @@ func (s *Server) Close() error {
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	hosts := s.store.list()
-	if s.config.LocalSocket != "" {
-		hosts = append([]Host{{ID: "local", Name: "This computer", Target: "local", Status: "online", Stage: "Local runtime"}}, hosts...)
+	if s.hasLocalMastermind() {
+		local := Host{ID: "local", Name: "This computer", Target: "local", Status: "online", Stage: "Local runtime"}
+		if s.config.LocalAgentDir != "" {
+			local.Stage = "Local Mastermind"
+		}
+		s.mu.Lock()
+		if s.localAgentConnecting {
+			local.Status, local.Stage = "connecting", "Checking local Mastermind service"
+		} else if s.localAgentError != "" {
+			local.Status, local.Error = "error", s.localAgentError
+		}
+		s.mu.Unlock()
+		hosts = append([]Host{local}, hosts...)
 	}
-	writeJSON(w, 200, map[string]any{"version": s.config.Version, "hosts": hosts, "maintenanceJobs": s.maintenance.list(), "mastermind": s.mastermind.current().MastermindState})
+	writeJSON(w, 200, map[string]any{"version": s.config.Version, "hosts": hosts, "maintenanceJobs": s.maintenance.list(), "mastermind": s.mastermindState()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

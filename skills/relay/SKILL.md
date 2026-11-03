@@ -5,7 +5,9 @@ description: Delegate work to named machines in the Relay fleet and coordinate t
 
 # Relay
 
-Relay keeps terminal processes on their owning Linux host independently of its desktop client. Use the installed CLI at `$HOME/.local/share/relay/bin/relay`. For a local development install, use the Relay binary supplied by the user.
+Relay keeps terminal processes on their owning host independently of its desktop client. Prefer the executable in `RELAY_BIN`; otherwise use `$HOME/.local/share/relay/bin/relay` on Linux. In PowerShell invoke it as `& $env:RELAY_BIN`. For a local development install, use the Relay binary supplied by the user.
+
+Inside local Mastermind, the injected private controller connection lets `fleet list` and `session ... --host NAME` use Relay's already connected hosts. Always specify the exact host there. Do not print or copy the capability file or controller environment. The `relay-mastermind` skill and `workspace skill` command describe its pages and task board. Outside that coordinator, the SSH requirements below apply.
 
 For a named machine, start with `"$HOME/.local/share/relay/bin/relay" fleet list`. This translates the desktop's machine names into available SSH targets. Use the exact returned name or ID with `session <action> --host NAME`; keep that host with every returned session ID. A local provider subagent does not create a session on another machine.
 
@@ -14,7 +16,7 @@ For work on this machine, start with `"$HOME/.local/share/relay/bin/relay" sessi
 ## Inspect and delegate
 
 ```sh
-relay_cli="$HOME/.local/share/relay/bin/relay"
+relay_cli="${RELAY_BIN:-$HOME/.local/share/relay/bin/relay}"
 "$relay_cli" session list
 "$relay_cli" session read --id SESSION_ID
 "$relay_cli" session start --harness codex --cwd /absolute/project --workspace Review --title Reviewer

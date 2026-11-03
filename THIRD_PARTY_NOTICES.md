@@ -9,7 +9,9 @@ Release bundles include complete notices collected from the dependencies:
 - `THIRD_PARTY_NOTICES.txt`: the Go standard library, the union of Go dependencies
   for Linux amd64, Linux arm64, and Windows amd64, and browser production packages.
   This includes the MIT-licensed Windows named-pipe dependency `go-winio`, React,
-  xterm.js, and the ISC-licensed Lucide icons (including its upstream icon notices).
+  xterm.js, Apache-2.0-licensed DOMPurify, and the ISC-licensed Lucide icons
+  (including their upstream notices). DOMPurify offers Apache-2.0 or MPL-2.0;
+  Relay distributes it under Apache-2.0 with its included license text.
 - `RUST_THIRD_PARTY_NOTICES.txt`: Cargo dependencies for the packaged target,
   their licenses and exact source archive URLs, the Rust standard library's
   toolchain-supplied notices, and the Microsoft WebView2 SDK loader notices on

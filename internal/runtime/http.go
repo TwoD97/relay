@@ -40,7 +40,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "home": s.home, "hostname": s.hostname, "capabilities": map[string]bool{"mastermindV1": true}})
+	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "home": s.home, "hostname": s.hostname, "capabilities": map[string]bool{"mastermindV1": true, "localMastermindV1": true}})
 }
 func sortSessions(metas []Session) {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].CreatedAt.Before(metas[j].CreatedAt) })
@@ -57,14 +57,15 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
-	Title        string `json:"title"`
-	Workspace    string `json:"workspace"`
-	Cwd          string `json:"cwd"`
-	Harness      string `json:"harness"`
-	AgentMode    string `json:"agentMode"`
-	MastermindID string `json:"mastermindId"`
-	Cols         int    `json:"cols"`
-	Rows         int    `json:"rows"`
+	Title                 string            `json:"title"`
+	Workspace             string            `json:"workspace"`
+	Cwd                   string            `json:"cwd"`
+	Harness               string            `json:"harness"`
+	AgentMode             string            `json:"agentMode"`
+	MastermindID          string            `json:"mastermindId"`
+	MastermindEnvironment map[string]string `json:"mastermindEnvironment,omitempty"`
+	Cols                  int               `json:"cols"`
+	Rows                  int               `json:"rows"`
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +102,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MastermindID != "" && (!validMastermindID(req.MastermindID) || req.Harness == "shell") {
 		fail(w, 400, errors.New("mastermindId must be 32 lowercase hexadecimal characters on a Claude Code or Codex session"))
+		return
+	}
+	if err := validateMastermindEnvironment(req.MastermindID, req.MastermindEnvironment); err != nil {
+		fail(w, 400, err)
 		return
 	}
 	cwd, err := s.resolveCwd(req.Cwd)
@@ -147,7 +152,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		permissions = s.permissionCapability(r.Context(), req.Harness, path)
 		args = permissionHarnessArguments(req.Harness, executable, permissions.Support != "terminal-only")
-		args = sessionAgentArguments(req.Harness, mode, req.MastermindID != "", args)
+		if len(req.MastermindEnvironment) > 0 {
+			args = localMastermindArguments(req.Harness, mode, args)
+		} else {
+			args = sessionAgentArguments(req.Harness, mode, req.MastermindID != "", args)
+		}
 	}
 	if r.Context().Err() != nil {
 		fail(w, http.StatusRequestTimeout, errors.New("Session preparation was cancelled; no session was started"))
@@ -160,7 +169,14 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		if req.MastermindID != "" {
 			_, _ = io.WriteString(out, "Relay Mastermind: your fleet coordinator. Describe a task here; use Relay to discover machines and delegate work.\r\n")
 		}
-		return exec.Command(path, args...), nil
+		cmd := exec.Command(path, args...)
+		if len(req.MastermindEnvironment) > 0 {
+			cmd.Env = s.environment()
+			for key, value := range req.MastermindEnvironment {
+				cmd.Env = setEnv(cmd.Env, key, value)
+			}
+		}
+		return cmd, nil
 	})
 	if err != nil {
 		fail(w, 409, err)
@@ -210,7 +226,12 @@ func (s *Server) patchSession(w http.ResponseWriter, r *http.Request) {
 	err := s.persistLocked()
 	if err != nil {
 		p.mu.Lock()
-		p.meta = previous
+		p.meta.Title, p.meta.Workspace = previous.Title, previous.Workspace
+		// Process completion updates metadata independently of the store lock.
+		// A failed rename must not restore an older running/approval state.
+		if p.meta.UpdatedAt.Equal(meta.UpdatedAt) {
+			p.meta.UpdatedAt = previous.UpdatedAt
+		}
 		p.mu.Unlock()
 	}
 	s.mu.Unlock()

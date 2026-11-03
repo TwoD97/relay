@@ -11,7 +11,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -49,6 +51,7 @@ func sessionCommand(args []string) error {
 	}
 	provided := make(map[string]bool)
 	f.Visit(func(option *flag.Flag) { provided[option.Name] = true })
+	useController := agentBridgeConfigured() && !provided["socket"] && !provided["ssh"] && !provided["ssh-port"] && !provided["fleet"]
 	if provided["mode"] {
 		if action != "start" || (*mode != "manual" && *mode != "auto") {
 			return errors.New("--mode is only valid for session start and must be manual or auto")
@@ -64,18 +67,20 @@ func sessionCommand(args []string) error {
 		if *fleetHost == "" || provided["ssh"] || provided["ssh-port"] {
 			return errors.New("--host requires a machine name or ID and cannot be combined with --ssh or --ssh-port")
 		}
-		host, err := resolveFleetHost(*fleetHost, *fleetID, *socket)
-		if err != nil {
-			return err
-		}
-		if !host.Self {
-			*sshHost, *sshPort = host.Target, host.Port
+		if !useController {
+			host, err := resolveFleetHost(*fleetHost, *fleetID, *socket)
+			if err != nil {
+				return err
+			}
+			if !host.Self {
+				*sshHost, *sshPort = host.Target, host.Port
+			}
 		}
 	}
 	if err := validateSessionSSH(*sshHost, *sshPort); err != nil {
 		return err
 	}
-	if *sshHost == "" && !localRuntimeSupported {
+	if !useController && *sshHost == "" && !localRuntimeSupported {
 		return errors.New("local sessions require Linux; use --ssh to control a Linux host from Windows")
 	}
 	if *sshHost != "" && !provided["host"] {
@@ -122,6 +127,21 @@ func sessionCommand(args []string) error {
 		}
 	default:
 		return fmt.Errorf("unknown session action %q", action)
+	}
+	if useController {
+		if *fleetHost == "" {
+			return errors.New("Inside Mastermind, supply --host with an exact machine from relay fleet list")
+		}
+		hostID, err := agentHost(*fleetHost)
+		if err != nil {
+			return err
+		}
+		data, err := agentRequest(method, "/agent/hosts/"+url.PathEscape(hostID)+strings.TrimPrefix(path, "/api"), body)
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(data)
+		return err
 	}
 	var data []byte
 	var err error

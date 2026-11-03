@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,7 +21,7 @@ import (
 	"github.com/TwoD97/relay/web"
 )
 
-var version = "0.2.1-dev"
+var version = "0.3.0-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -43,7 +44,7 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	case "help", "--help", "-h":
-		fmt.Println("Relay is a desktop application. Open the Relay app to manage your fleet.\n\nrelay [session|fleet|project-context|daemon|ensure|bridge|version]\n\nsession  List, start, read, send input to, or stop a session\nfleet    List saved Relay machine names and resolved SSH endpoints\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
+		fmt.Println("Relay is a desktop application. Open the Relay app to manage your fleet.\n\nrelay [session|fleet|workspace|project-context|daemon|ensure|bridge|version]\n\nsession  List, start, read, send input to, or stop a session\nfleet    List Relay machines and available connections\nworkspace  Manage Mastermind pages/tasks or read its bundled skill\nproject-context  Prepare opt-in shared project instructions and notes\nensure   Start or check the persistent local runtime\ndaemon   Run the runtime in the foreground\nbridge   Bridge stdin/stdout to the private runtime socket\n\nUse <command> --help for options.")
 		return nil
 	case "ui":
 		return serveUI(args)
@@ -63,6 +64,10 @@ func run(args []string) error {
 		return sessionCommand(args)
 	case "fleet":
 		return fleetCommand(args)
+	case "workspace":
+		return workspaceCommand(args)
+	case "local-agent-ensure", "local-agent-daemon", "local-agent-install":
+		return localAgentCommand(command, args)
 	case "project-context":
 		return projectContextCommand(args)
 	case "daemon", "ensure", "bridge", "harness-maintain", "mastermind-worker":
@@ -103,7 +108,19 @@ func serveUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	app, err := controller.New(controller.Config{StateDir: opts.StateDir, BinaryDir: opts.BinaryDir, Version: version, Address: listener.Addr().String(), LocalSocket: localSocket, Assets: assets})
+	localAgentDir, localAgentError := "", ""
+	var ensureAgent func(context.Context) error
+	if opts.LocalMastermind && localSocket == "" {
+		localAgentDir = filepath.Join(opts.StateDir, "local-agent")
+		ensureAgent = func(ctx context.Context) error { _, err := ensureLocalAgent(ctx, localAgentDir); return err }
+		startCtx, startCancel := context.WithTimeout(context.Background(), 25*time.Second)
+		if err := ensureAgent(startCtx); err != nil {
+			localAgentError = "The local Mastermind service could not start. Reconnect Relay to retry."
+		}
+		startCancel()
+	}
+
+	app, err := controller.New(controller.Config{StateDir: opts.StateDir, BinaryDir: opts.BinaryDir, Version: version, Address: listener.Addr().String(), LocalSocket: localSocket, LocalAgentDir: localAgentDir, LocalAgentError: localAgentError, EnsureLocalAgent: ensureAgent, Assets: assets})
 	if err != nil {
 		return err
 	}

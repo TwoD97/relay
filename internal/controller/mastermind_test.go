@@ -57,7 +57,7 @@ func (f *mastermindRuntimeFixture) handle(w http.ResponseWriter, r *http.Request
 	}
 	switch {
 	case r.URL.Path == "/api/health":
-		writeJSON(w, 200, map[string]any{"home": f.home, "capabilities": map[string]bool{"mastermindV1": f.supported}})
+		writeJSON(w, 200, map[string]any{"home": f.home, "capabilities": map[string]bool{"mastermindV1": f.supported, "localMastermindV1": f.supported}})
 	case r.URL.Path == "/api/harnesses":
 		writeJSON(w, 200, []map[string]any{{"id": "claude", "installed": true, "authenticated": f.authenticated}, {"id": "codex", "installed": true, "authenticated": f.authenticated}})
 	case r.URL.Path == "/api/sessions" && r.Method == "GET":

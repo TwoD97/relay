@@ -30,6 +30,10 @@ param(
     [switch]$LaunchOnly,
     # SSH/PTY rendering and resize checks without physical mouse or clipboard.
     [switch]$RenderingOnly,
+    # Native coordinator/canvas/detached-view rendering with a test provider PE.
+    # No SSH, physical mouse events, clipboard, or real provider account access.
+    [switch]$LocalMastermindOnly,
+    [string]$ProviderFixture = '',
     # Enable only with a disposable account clipboard. This replaces clipboard
     # contents with fixture text; private clipboard contents are never captured.
     [switch]$Clipboard
@@ -419,6 +423,167 @@ function Fresh-Launch {
     } finally { Stop-OwnedProcess $helper }
 }
 
+function Prepare-LocalProviderFixture {
+    $fixture = (Resolve-Path -LiteralPath $script:ProviderFixture).Path
+    $probe = Start-OwnedProcess $fixture @('--version') @{ LOCALAGENT_PROVIDER_FIXTURE='1' }
+    try {
+        Assert-True ($probe.Process.WaitForExit(10000)) 'Fixture provider preflight timed out'
+    Assert-True ($probe.Process.ExitCode -eq 0 -and $probe.Output.GetAwaiter().GetResult().Trim() -ceq 'fixture 1.0.0') 'ProviderFixture requires the isolated localagent test PE, not a real provider'
+    } finally { Stop-OwnedProcess $probe }
+    foreach ($provider in @('claude','codex')) {
+        $release = '1.0.0-' + [Guid]::NewGuid().ToString('N')
+        $prefix = Join-Path $script:StateDirectory "local-agent\tools\harnesses\$provider"
+        $directory = Join-Path $prefix "releases\$release"
+        [void][IO.Directory]::CreateDirectory($directory)
+        [IO.File]::Copy($fixture, (Join-Path $directory 'provider.exe'))
+        $pointer = @{ format=1; harness=$provider; release=$release; executable='provider.exe' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText((Join-Path $prefix 'current.json'), $pointer, [Text.UTF8Encoding]::new($false))
+    }
+    $script:TestEnvironment.LOCALAGENT_PROVIDER_FIXTURE = '1'
+}
+
+function Capture-LocalAgentIdentity {
+    $health = API-JSON '/api/hosts/local/runtime/health'
+    $process = Get-Process -Id ([int]$health.pid) -ErrorAction Stop
+    $prefix = (Join-Path $script:StateDirectory 'local-agent\controller-releases') + '\'
+    Assert-True ($process.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) 'Local service did not use this test-owned immutable release'
+    return Process-Identity $process.Id $process.Path
+}
+
+function Invoke-FixtureAgentCLI([string[]]$Arguments) {
+    $state = (API-JSON '/api/state').mastermind
+    Assert-True ($state.session.mastermindId -cmatch '^[0-9a-f]{32}$') 'Local coordinator capability identity is unavailable'
+    $environment = @{}
+    foreach ($key in $script:TestEnvironment.Keys) { $environment[$key]=$script:TestEnvironment[$key] }
+    $environment.RELAY_CONTROLLER_STATE=$script:StateDirectory
+    $environment.RELAY_AGENT_CAPABILITY_FILE=Join-Path $script:StateDirectory ('agent-capabilities\'+$state.session.mastermindId+'.json')
+    $helper = Start-OwnedProcess $script:Controller $Arguments $environment
+    try {
+        Assert-True ($helper.Process.WaitForExit(60000)) 'Fixture agent CLI timed out'
+        Assert-True ($helper.Process.ExitCode -eq 0) 'Fixture agent CLI request failed; private connection data withheld'
+        return $helper.Output.GetAwaiter().GetResult() | ConvertFrom-Json
+    } finally { Stop-OwnedProcess $helper }
+}
+
+function Test-FixtureImagePaste {
+    # Mock only the clipboard read boundary with a synthetic PNG. No Windows
+    # clipboard read/write is allowed in this normal-user account. The actual
+    # frontend, native HTTP upload, private file and ConPTY input remain real.
+    $fixture=Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;
+canvas.getContext('2d').fillStyle='rgb(17,93,201)';canvas.getContext('2d').fillRect(0,0,2,2);
+canvas.toBlob(async blob=>{
+  try {
+    const clipboard=navigator.clipboard;
+    const saved={read:Object.getOwnPropertyDescriptor(clipboard,'read'),readText:Object.getOwnPropertyDescriptor(clipboard,'readText')};
+    const prevent=event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='v')event.preventDefault();};
+    document.addEventListener('keydown',prevent,true);
+    window.__relayImageFixture={restore:()=>{for(const key of ['read','readText']){if(saved[key])Object.defineProperty(clipboard,key,saved[key]);else delete clipboard[key];}document.removeEventListener('keydown',prevent,true);}};
+    Object.defineProperty(clipboard,'read',{configurable:true,value:async()=>[{types:['image/png'],getType:async()=>blob}]});
+    Object.defineProperty(clipboard,'readText',{configurable:true,value:async()=>''});
+    done(btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer()))));
+  }catch{done(null);}
+},'image/png');
+'@
+    try {
+        Assert-True ($fixture -is [string] -and $fixture.Length -gt 0) 'Could not install the synthetic clipboard fixture'
+        $input=Find-Element 'css selector' '.mastermind-terminal textarea.xterm-helper-textarea'
+        [void](Session-WD POST "/element/$input/value" @{text='native-image-proof '})
+        [void](Session-WD POST "/element/$input/value" @{text=([string][char]0xE009+'v'+[char]0xE000)})
+        $imageRoot=Join-Path $script:StateDirectory 'images'
+        $file=Wait-Until {
+            if(-not (Test-Path -LiteralPath $imageRoot)){return $null}
+            $files=@(Get-ChildItem -LiteralPath $imageRoot -Recurse -File -Filter '*.png')
+            Assert-True ($files.Count -le 1) 'One image paste created duplicate files'
+            if($files.Count -eq 1){return $files[0]};return $null
+        } 'synthetic clipboard image uploaded to native Windows storage'
+        Assert-True (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) 'Native image attachment is a reparse point'
+        Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($file.FullName)) -ceq $fixture) 'Native image bytes differ from the synthetic fixture'
+        Assert-True ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $file.BaseName) 'Native image checksum differs from its saved identity'
+        $path=$file.FullName.Replace('\','/')
+        [void](Wait-Until {Terminal-Contains $path} 'image path pasted into the current ConPTY')
+        Assert-True (-not (Terminal-Contains 'RESULT native-image-proof')) 'Image paste submitted provider input without Enter'
+        [void](Session-WD POST "/element/$input/value" @{text=([string][char]0xE007)})
+        [void](Wait-Until {Terminal-Contains 'RESULT native-image-proof'} 'fixture accepts image path only after explicit Enter')
+        Save-Screenshot 'native-synthetic-image-attachment.png'
+        Write-Host 'PASS: synthetic clipboard-read fixture, native Windows image upload/checksum and ConPTY path without Enter; OS clipboard untouched'
+    } finally {
+        [void](Execute-JS 'window.__relayImageFixture?.restore();delete window.__relayImageFixture;')
+    }
+}
+
+function Test-LocalMastermindRendering {
+    Click-Button 'Mastermind'
+    [void](Wait-Until { Body-Contains 'Mastermind workspace' } 'dedicated local Mastermind page')
+    Click-Button 'Set up Mastermind'
+    [void](Wait-Until { Execute-JS 'return !!document.querySelector("[role=dialog] input[aria-label=\"Claude Code\"]:not(:disabled)") && [...document.querySelectorAll("[role=dialog] button")].some(b=>b.textContent.trim()==="Save and start Mastermind"&&!b.disabled);' } 'fixture provider capability and login-status checks')
+    Assert-True (Execute-JS 'return document.querySelector("[aria-label=Machine]").value === "local";') 'New coordinator did not default to this computer'
+    Click-Button 'Save and start Mastermind'
+    [void](Wait-Until { $current=(API-JSON '/api/state').mastermind; $current.status -eq 'running' -and $current.config.hostId -eq 'local' } 'local coordinator becomes verified' 60)
+    $coordinator=(API-JSON '/api/state').mastermind
+    $session=$coordinator.session.id
+    Assert-True ($session -cmatch '^[0-9a-f]{32}$') 'Invalid local fixture session identity'
+    [void](Wait-Until { Terminal-Contains 'READY' } 'real ConPTY fixture output painted in Mastermind')
+    Click-Selector '.mastermind-terminal .terminal-canvas'
+    [void](Wait-Until { Body-Contains 'Controlling' } 'Mastermind direct terminal lease')
+    $input=Find-Element 'css selector' '.mastermind-terminal textarea.xterm-helper-textarea'
+    [void](Session-WD POST "/element/$input/value" @{text=('native-mastermind-proof'+[char]0xE007)})
+    [void](Wait-Until { Terminal-Contains 'RESULT native-mastermind-proof' } 'direct native ConPTY input/output')
+    Assert-True ((API "/api/hosts/local/runtime/sessions/$session/input" POST @{data='denied fixture input'}).Status -eq 409) 'Independent client bypassed native terminal lease'
+    Test-FixtureImagePaste
+    # The long attachment path can legitimately scroll the earlier marker out
+    # of this compact panel. Reopen checks use the newest visible screen.
+    [void](Session-WD POST "/element/$input/value" @{text=('native-mastermind-after-image'+[char]0xE007)})
+    [void](Wait-Until { Terminal-Contains 'RESULT native-mastermind-after-image' } 'native terminal continues after the attachment')
+    Click-Button 'Release control'
+
+    # Use the same private CLI surface supplied to the coordinator, without a
+    # model call. It must publish through CAS and active-launch authorization.
+    $workspace=Invoke-FixtureAgentCLI @('workspace','show')
+    $html=Join-Path $script:StateDirectory 'mastermind-fixture-plan.html'
+    [IO.File]::WriteAllText($html,'<h1>LOCAL MASTER PLAN</h1><p>Native fixture evidence.</p><script>window.parent.FIXTURE_ESCAPE=true</script>',[Text.UTF8Encoding]::new($false))
+    $created=Invoke-FixtureAgentCLI @('workspace','pages','create','--revision',[string]$workspace.revision,'--title','Native fixture plan','--html-file',$html)
+    $task=Invoke-FixtureAgentCLI @('workspace','tasks','create','--revision',[string]$created.workspace.revision,'--title','Verify local coordinator','--status','doing','--page',$created.page.id,'--host','local','--session',$session)
+    [void](Wait-Until { Body-Contains 'Verify local coordinator' } 'agent-authored native task board')
+    [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe");return !!frame&&frame.getAttribute("sandbox")===""&&frame.srcdoc.includes("LOCAL MASTER PLAN")&&!frame.srcdoc.includes("<script")&&!window.FIXTURE_ESCAPE;' } 'sandboxed agent-authored HTML page')
+    $frame=Find-Element 'css selector' '.canvas-document iframe'
+    [void](Session-WD POST '/frame' @{id=@{'element-6066-11e4-a52e-4f735466cecf'=$frame}})
+    try {
+        [void](Wait-Until { Execute-JS 'const heading=document.querySelector("h1");if(!heading||heading.textContent!=="LOCAL MASTER PLAN")return false;const r=heading.getBoundingClientRect(),style=getComputedStyle(heading);return r.width>0&&r.height>0&&style.visibility!=="hidden"&&style.display!=="none";' } 'actual sandboxed document heading renders')
+    } finally { [void](Session-WD POST '/frame' @{id=$null}) }
+    Assert-True (Terminal-Contains 'RESULT native-mastermind-after-image') 'Workspace changes lost the running terminal screen'
+    Save-Screenshot 'native-local-mastermind.png'
+
+    # Open through the real UI command. A detached view is a separate process
+    # and private profile, so its owned HWND is inspected rather than assuming
+    # it belongs to this EdgeDriver's browsing-context list.
+    Click-Selector '[aria-label="Open terminal in new window"]'
+    $script:DetachedIdentity=Wait-Until {
+        foreach($candidate in @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $script:NativeIdentity.Id -and [string]::Equals($_.ExecutablePath,$script:Desktop,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine.Contains('--session-window') -and $_.CommandLine.Contains($session) })) {
+            $window=[RelayWindowProbe]::MainFrame($candidate.ProcessId)
+            if($window -ne [IntPtr]::Zero){$identity=Process-Identity $candidate.ProcessId $script:Desktop;$identity|Add-Member NoteProperty Window $window;return $identity}
+        };return $null
+    } 'separate owned native terminal window' 60
+    [void](Wait-Until { Save-NativeWindow $script:DetachedIdentity 'native-detached-mastermind.png' -CheckContent } 'detached terminal native paint' 30)
+    Assert-True (@((API-JSON '/api/hosts/local/runtime/sessions')).Count -eq 1) 'Opening a terminal window created another provider session'
+    Close-NativeWindow
+    Close-AppSession
+    $detached=Get-Process -Id $script:DetachedIdentity.Id -ErrorAction Stop
+    Assert-True (-not $detached.HasExited) 'Closing the workspace also closed the independent terminal window'
+    Assert-True (((API-JSON '/api/hosts/local/runtime/sessions')[0]).id -eq $session) 'Closing the workspace replaced the local session'
+    [void]$detached.CloseMainWindow()
+    Assert-True ($detached.WaitForExit(10000)) 'Detached window did not close normally'
+    Start-AppSession
+    Click-Button 'Mastermind'
+    [void](Wait-Until { Terminal-Contains 'RESULT native-mastermind-after-image' } 'native local coordinator replay after reopening')
+    $after=(API-JSON '/api/state').mastermind
+    Assert-True ($after.session.id -eq $session -and $after.session.createdAt -eq $coordinator.session.createdAt) 'Reopening duplicated or replaced Mastermind'
+    Assert-True ((API-JSON '/api/mastermind/workspace').revision -eq $task.workspace.revision) 'Reopening lost authored pages or tasks'
+    Save-Screenshot 'native-local-mastermind-reopened.png'
+    Write-Host 'PASS: local ConPTY Mastermind, private CLI canvas/tasks, sandbox, independent native window, lease and close/reopen persistence; no provider account or inference used'
+}
+
 function App-Identity {
     $processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, ExecutablePath)
     $descendants = @($script:DriverProcess.Process.Id)
@@ -471,8 +636,10 @@ function Save-NativeWindow($Identity, [string]$Name = 'native-window.png', [swit
             # accepting an entirely blank light or dark background. This only
             # captures the exact owned HWND, never the screen or clipboard.
             $lightPixels = $darkPixels = 0
-            for ($y = 90; $y -lt $height - 20; $y += 8) {
-                for ($x = [int]($width / 4); $x -lt $width - 20; $x += 8) {
+            # A detached terminal can contain only a few left-aligned lines.
+            # Include that interior area, excluding the native window border.
+            for ($y = 90; $y -lt $height - 20; $y += 4) {
+                for ($x = 20; $x -lt $width - 20; $x += 4) {
                     $pixel = $bitmap.GetPixel($x, $y)
                     $luminance = 0.2126 * $pixel.R + 0.7152 * $pixel.G + 0.0722 * $pixel.B
                     if ($luminance -gt 180) {
@@ -592,19 +759,29 @@ function Test-TerminalResizeRendering {
                 [void](Wait-Until { [RelayWindowProbe]::IsZoomed($window) -eq ($case.label -eq 'maximized') } 'terminal maximize/restore')
             }
             [void](Wait-NativeGeometry ("terminal-" + $case.label))
+            [void](Execute-JS 'delete window.__relayTestGeometryReady;')
             $geometry = Wait-Until {
                 Execute-JS @'
+const previous=window.__relayTestGeometryReady;delete window.__relayTestGeometryReady;
 const shell=document.querySelector('.session-view .terminal-shell');
-const mount=shell?.querySelector('.terminal-mount'), screen=shell?.querySelector('.xterm-screen');
-if(!shell||!mount||!screen)return false;
+const canvas=shell?.querySelector('.terminal-canvas'),mount=shell?.querySelector('.terminal-mount'),screen=shell?.querySelector('.xterm-screen');
+if(!shell||!canvas||!mount||!screen)return false;
 const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows);
 if(!cols||!rows)return false;
-const m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect();
+const c=canvas.getBoundingClientRect(),m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect(),style=getComputedStyle(canvas);
+const left=c.left+canvas.clientLeft+parseFloat(style.paddingLeft),top=c.top+canvas.clientTop+parseFloat(style.paddingTop);
+const right=c.left+canvas.clientLeft+canvas.clientWidth-parseFloat(style.paddingRight),bottom=c.top+canvas.clientTop+canvas.clientHeight-parseFloat(style.paddingBottom);
+// ResizeObserver and the PTY acknowledgement can trail the native resize. A
+// stale screen can fit its stale mount, so first require the current canvas.
+if(m.left<left-1||m.top<top-1||m.right>right+1||m.bottom>bottom+1||Math.abs(m.width-(right-left))>1||Math.abs(m.height-(bottom-top))>1)return false;
 if(!s.width||!s.height||s.left<m.left-1||s.top<m.top-1||s.right>m.right+1||s.bottom>m.bottom+1)return false;
 const scrollbar=shell.querySelector(".xterm-scrollable-element > .scrollbar.vertical")?.getBoundingClientRect().width||0;
 if(m.width-s.width>scrollbar+s.width/cols+2||m.height-s.height>s.height/rows+2)return false;
 if(!shell.querySelector('[aria-label="Terminal dimensions"]')?.textContent.includes(`${cols} \u00d7 ${rows}`))return false;
-return {cols,rows,dpr:devicePixelRatio,mount:{width:m.width,height:m.height},screen:{width:s.width,height:s.height},rowElements:shell.querySelectorAll('.xterm-rows>div').length};
+const result={cols,rows,dpr:devicePixelRatio,canvas:{width:right-left,height:bottom-top},mount:{width:m.width,height:m.height},screen:{width:s.width,height:s.height},rowElements:shell.querySelectorAll('.xterm-rows>div').length};
+const key=JSON.stringify(result),now=performance.now();
+window.__relayTestGeometryReady={key,since:previous?.key===key?previous.since:now};
+return now-window.__relayTestGeometryReady.since>=300?result:false;
 '@
             } 'terminal fits its unpadded viewport and reports current dimensions'
             $marker = 'RELAY_SIZE_' + [Guid]::NewGuid().ToString('N').Substring(0,8)
@@ -958,8 +1135,9 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Driver
 Assert-True ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match 'Microsoft Corporation') 'WebDriver must have a valid Microsoft Authenticode signature'
 Assert-True (-not ($LaunchOnly -and $OverrideBundle)) 'LaunchOnly must use the extracted app default resources'
 Assert-True (-not ($RenderingOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard))) 'RenderingOnly uses SSH and excludes physical-frame and clipboard modes'
+Assert-True (-not ($LocalMastermindOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard -or $RenderingOnly))) 'LocalMastermindOnly is a separate fixture-only rendering mode'
 $password = $null
-if (-not ($FrameOnly -or $LaunchOnly)) {
+if (-not ($FrameOnly -or $LaunchOnly -or $LocalMastermindOnly)) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($FixtureTarget)) 'Provide a disposable SSH fixture target'
     Assert-True ($FixtureFingerprint -match '^SHA256:[A-Za-z0-9+/]{40,}={0,2}$') 'Provide the known disposable fixture host fingerprint'
     $password = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $FixturePasswordFile).Path).TrimEnd("`r", "`n")
@@ -979,12 +1157,14 @@ $TestEnvironment = @{
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=$null
 }
 if ($OverrideBundle) { $TestEnvironment.RELAY_DESKTOP_BUNDLE = $Bundle }
+if ($LocalMastermindOnly -or $ProviderFixture) { Prepare-LocalProviderFixture }
 $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
 $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
 $DriverURL = "http://127.0.0.1:$port"
 $DriverHTTP, $BrowserHTTP = (New-HTTPClient), (New-HTTPClient $true)
 $DriverProcess = $NativeIdentity = $ControllerIdentity = $SessionID = $null
 $NormalProcess = $null
+$LocalAgentIdentity = $DetachedIdentity = $null
 $remoteSession = $remoteHost = $null
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
@@ -992,7 +1172,7 @@ try {
     $DriverProcess = Start-OwnedProcess $Driver @("--port=$port", '--allowed-ips=127.0.0.1') $TestEnvironment
     [void](Wait-Until { try { (HTTP $DriverHTTP GET "$DriverURL/status").Status -eq 200 } catch { $false } } 'Microsoft Edge WebDriver startup')
     Start-AppSession
-    if (-not ($LaunchOnly -or $RenderingOnly)) { Test-CustomFrame }
+    if (-not ($LaunchOnly -or $RenderingOnly -or $LocalMastermindOnly)) { Test-CustomFrame }
     Test-NativeResizeGeometry
     $launch = Fresh-Launch
     $ControllerIdentity = Controller-Identity $launch.pid
@@ -1001,9 +1181,15 @@ try {
     Assert-True ($authenticated.Status -eq 200) 'Independent browser could not authenticate'
     $CSRF = (API-JSON '/api/bootstrap').csrf
     Assert-True ((HTTP $BrowserHTTP GET $launch.url).Status -eq 401) 'One-time native login link was reused'
-    Assert-True (@((API-JSON '/api/state').hosts).Count -eq 0) 'Test did not start with isolated Windows controller state'
-    [void](Wait-Until { Body-Contains 'Connect your first machine' } 'empty isolated Windows fleet')
+    Assert-True (@((API-JSON '/api/state').hosts | Where-Object {$_.id -ne 'local'}).Count -eq 0) 'Test did not start with isolated Windows controller state'
+    if (@((API-JSON '/api/state').hosts | Where-Object {$_.id -eq 'local'}).Count -gt 0) { $LocalAgentIdentity=Capture-LocalAgentIdentity }
+    [void](Wait-Until { Body-Contains 'Connect a machine' } 'isolated Windows fleet')
     Write-Host 'PASS: native PE + Win32 window + WebView2, native controller and independent browser login'
+    if ($LocalMastermindOnly) {
+        Test-LocalMastermindRendering
+        Write-Host ('PASS: local native rendering gate; elapsed {0:N2} seconds' -f $clock.Elapsed.TotalSeconds)
+        return
+    }
     if ($LaunchOnly) {
         Test-NativeAppearance
         [void](Wait-Until { Select-NativeView 'menu' } 'trusted portable menu')
@@ -1020,14 +1206,14 @@ try {
         return
     }
 
-    Click-Button 'Connect your first machine'
+    Click-Button 'Connect a machine'
     Fill-Element xpath "//label[starts-with(normalize-space(.),'SSH destination')]/input" $FixtureTarget
     Fill-Element xpath "//label[starts-with(normalize-space(.),'Display name')]/input" 'Windows SSH fixture'
     Fill-Element xpath "//label[starts-with(normalize-space(.),'Port override')]/input" ([string]$FixturePort)
     Click-Button 'Connect machine'
     $trusted = $sentPassword = $false
     [void](Wait-Until {
-        $hosts = @((API-JSON '/api/state').hosts)
+        $hosts = @((API-JSON '/api/state').hosts | Where-Object {$_.id -ne 'local'})
         if ($hosts.Count -eq 0) { return $false }
         $script:remoteHost = $hosts[0].id
         if ($hosts[0].status -eq 'online') { return $true }
@@ -1111,14 +1297,14 @@ try {
     Close-AppSession
     Assert-True ((API "/api/hosts/$remoteHost/disconnect" POST).Status -eq 204) 'Could not disconnect disposable SSH transport'
     Start-AppSession
-    [void](Wait-Until { @((API-JSON '/api/state').hosts)[0].status -eq 'connecting' } 'app startup automatically reconnects the saved host')
+    [void](Wait-Until { @((API-JSON '/api/state').hosts | Where-Object {$_.id -eq $remoteHost})[0].status -eq 'connecting' } 'app startup automatically reconnects the saved host')
     [void](Session-WD POST '/url' @{ url="$Origin/#host/$remoteHost" })
     [void](Wait-Until { Body-Contains 'Open setup' } 'saved-host authentication attention')
     Click-Button 'Open setup'
     [void](Wait-Until { Terminal-Contains ($FixtureTarget + "'s password:") } 'saved-host password prompt without another Connect action')
     Assert-True (-not (Terminal-Contains 'Are you sure')) 'Saved host trust was lost'
     Send-Setup $password
-    [void](Wait-Until { @((API-JSON '/api/state').hosts)[0].status -eq 'online' } 'automatic saved-host reconnect completes')
+    [void](Wait-Until { @((API-JSON '/api/state').hosts | Where-Object {$_.id -eq $remoteHost})[0].status -eq 'online' } 'automatic saved-host reconnect completes')
     [void](Wait-Until { Body-Contains 'Open machine' } 'automatic reconnect setup completion')
     Click-Button 'Open machine'
     [void](Session-WD POST '/url' @{ url="$Origin/#host/$remoteHost/session/$remoteSession" })
@@ -1146,6 +1332,7 @@ try {
     }
     Close-AppSession
     Stop-Identity $NativeIdentity
+    Stop-Identity $DetachedIdentity
     if (-not $ControllerIdentity) {
         # Capture an app-started controller even if WebView startup failed. The
         # exact executable plus this random private state path scope ownership.
@@ -1160,6 +1347,15 @@ try {
         }
     }
     Stop-Identity $ControllerIdentity
+    Stop-Identity $LocalAgentIdentity
+    # A startup failure can occur before health was captured. Only this
+    # random fixture's daemon executable/state path may be cleaned up.
+    if (-not $LocalAgentIdentity) {
+        $localPrefix=(Join-Path $StateDirectory 'local-agent\controller-releases')+'\'
+        foreach($child in @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($localPrefix,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine.Contains('local-agent-daemon') -and $_.CommandLine.Contains($StateDirectory) })) {
+            try { Stop-Identity (Process-Identity $child.ProcessId $child.ExecutablePath) } catch { }
+        }
+    }
     Stop-OwnedProcess $NormalProcess
     Stop-OwnedProcess $DriverProcess
     $DriverHTTP.Dispose(); $BrowserHTTP.Dispose()

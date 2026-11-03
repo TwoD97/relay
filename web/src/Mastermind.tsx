@@ -6,6 +6,7 @@ import { SessionApprovalNotice } from "./Approvals";
 import { FolderPicker } from "./FolderPicker";
 import { InlineError } from "./Forms";
 import { Terminal } from "./LazyTerminal";
+import { TerminalWindowActions } from "./TerminalWindowActions";
 import { Modal } from "./Modal";
 import type { AgentMode, FleetState, Host, MastermindState, Session } from "./types";
 import type { MastermindActions } from "./useMastermind";
@@ -18,23 +19,24 @@ const statusLabels: Record<MastermindState["status"], string> = {
   missing: "Session unavailable", blocked: "Needs attention", uncertain: "Checking previous start",
 };
 
-type Props = { fleet: FleetState; actions: MastermindActions; onAdd: () => void; onHost: (host: Host) => void; onSession: (host: Host, session: Session) => void; onActivity: () => void };
+type Props = { fleet: FleetState; actions: MastermindActions; onAdd: () => void; onHost: (host: Host) => void; onSession: (host: Host, session: Session) => void; onActivity: () => void; expanded?: boolean; onExpand?: () => void };
 
-export function Mastermind({ fleet, actions, onAdd, onHost, onSession, onActivity }: Props) {
+export function Mastermind({ fleet, actions, onAdd, onHost, onSession, onActivity, expanded = false, onExpand }: Props) {
   const [settings, setSettings] = useState(false);
+  const [preferLocal, setPreferLocal] = useState(false);
   const state = actions.state;
   const host = fleet.hosts.find((item) => item.id === state?.config?.hostId);
   const runtime = host && fleet.runtimes[host.id];
   const saved = state?.session;
   const worker = state?.execution === "worker";
   const identitySupported = saved && (worker ? saved.harness === "shell" && !saved.mastermindId && !saved.agentMode : (state?.execution === undefined || state.execution === "native") && Boolean(saved.mastermindId) && saved.harness !== "shell");
-  const session = saved && identitySupported ? runtime?.sessions.find((item) => item.id === saved.id && item.createdAt === saved.createdAt && (worker ? !item.mastermindId && !item.agentMode : item.mastermindId === saved.mastermindId && item.agentMode === saved.agentMode) && item.harness === saved.harness && item.cwd === saved.cwd && item.title === saved.title && item.workspace === saved.workspace && item.purpose === saved.purpose) : undefined;
+  const session = saved && identitySupported ? runtime?.sessions.find((item) => item.id === saved.id && item.createdAt === saved.createdAt && (worker ? !item.mastermindId && !item.agentMode : item.mastermindId === saved.mastermindId && item.agentMode === saved.agentMode) && item.harness === saved.harness && item.cwd === saved.cwd && item.purpose === saved.purpose) : undefined;
   const current = Boolean(!fleet.error && host?.status === "online" && runtime?.fetchedAt && !runtime.sessionsError);
   const confirmed = Boolean(state && ["running", "exited", "interrupted"].includes(state.status));
   const verified = Boolean(confirmed && current && session);
   const unavailable = Boolean(saved && !verified);
   const locked = actions.busy || actions.uncertain || Boolean(fleet.error);
-  const openSettings = () => { actions.clearError(); setSettings(true); };
+  const openSettings = () => { actions.clearError(); setPreferLocal(false); setSettings(true); };
   const startAvailable = state && ((!state.enabled && state.config) || ["exited", "interrupted", "missing"].includes(state.status));
   const setupCheck = state?.status === "blocked" && state.enabled && ["runtime", "harness", "folder", "worker"].includes(state.blocker ?? "");
   const harness = runtime?.harnesses.find((item) => item.id === state?.config?.harness);
@@ -46,11 +48,13 @@ export function Mastermind({ fleet, actions, onAdd, onHost, onSession, onActivit
       <div><div className="mastermind-title"><h2>Mastermind</h2><span className={`mastermind-state ${state?.enabled && verified && session?.status === "running" ? "running" : state && ["blocked", "uncertain", "interrupted", "missing"].includes(state.status) ? "attention" : ""}`}>{label}</span></div><p>Your persistent agent for planning and coordinating work across machines.</p></div>
       {state?.config && <nav className="mastermind-actions" aria-label="Mastermind actions">
         {state.enabled && verified && host && session && <button className="button secondary compact" onClick={() => onSession(host, session)}><ArrowUpRight size={14} />Open full terminal</button>}
+        {state.enabled && verified && host && session && onExpand && <TerminalWindowActions hostId={host.id} sessionId={session.id} expanded={expanded} onExpand={onExpand} />}
         <button className="icon-button" aria-label="Mastermind settings" title="Mastermind settings" disabled={actions.busy} onClick={openSettings}><Settings2 size={17} /></button>
       </nav>}
     </header>
 
     {state?.config ? <>
+      {state.config.hostId !== "local" && <p className="mastermind-compatibility">This coordinator still runs on {host?.name ?? "its configured remote machine"}. <button className="text-button" disabled={locked} onClick={() => { actions.clearError(); setPreferLocal(true); setSettings(true); }}>Switch to local</button> keeps the previous session running. Move it here to let it publish workspace pages and tasks.</p>}
       <div className="mastermind-context"><span><Server size={13} />{host?.name ?? "Machine unavailable"}</span><span>{provider(state.config.harness)}</span><span className="mono"><Folder size={13} />{saved?.cwd ?? state.config.cwd}</span>{saved && !worker ? <AgentModeBadge session={saved} /> : <span className={`agent-mode-badge ${state.config.agentMode === "auto" ? "mode-auto" : ""}`} aria-label={`Launch mode: ${state.config.agentMode === "auto" ? "Auto · full access" : "Manual"}`} title={worker && verified ? "Coordinator launch mode verified by Relay. Existing account and project restrictions still apply." : "Configured launch mode"}>{state.config.agentMode === "auto" ? "Auto · full access" : "Manual"}</span>}</div>
       {worker && saved && <p className="mastermind-compatibility">Mastermind uses a compatible session on this runtime. Your other sessions stay running.{state.config.agentMode === "manual" && " Review any permission prompts in its terminal; approval cards are unavailable for this session."}</p>}
       {(state.status !== "running" || state.error || unavailable || !state.enabled) && <div className="mastermind-notice">{["starting", "waiting"].includes(state.status) ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}<div>
@@ -68,23 +72,23 @@ export function Mastermind({ fleet, actions, onAdd, onHost, onSession, onActivit
           {state.blocker === "launch" && <button className="button secondary compact" disabled={locked || host?.status !== "online"} onClick={() => void actions.start(state.revision)}>{actions.busy ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}{actions.busy ? "Starting…" : "Retry start"}</button>}
         </div>}
       </div></div>}
-      {state.enabled && verified && host && session && <div className="mastermind-terminal"><Terminal key={JSON.stringify([host.id, session.id, session.createdAt, session.mastermindId])} path={runtimePath(host.id, `sessions/${encodeURIComponent(session.id)}/terminal`)} finished={session.status !== "running"} label="Mastermind terminal" /></div>}
+      {state.enabled && verified && host && session && <div className="mastermind-terminal"><Terminal key={JSON.stringify([host.id, session.id, session.createdAt, session.mastermindId])} path={runtimePath(host.id, `sessions/${encodeURIComponent(session.id)}/terminal`)} imageTarget={{ hostId: host.id, sessionId: session.id, createdAt: session.createdAt }} finished={session.status !== "running"} label="Mastermind terminal" /></div>}
       {state.enabled && verified && host && session && !worker && <SessionApprovalNotice host={host} session={session} runtime={runtime} onActivity={onActivity} />}
       {startAvailable && <div className="mastermind-footer"><p className="mastermind-note">{!state.enabled ? "Resume reconnects an existing session when it is still running." : "Start a new coordinator when you are ready. Previous session output is preserved."}</p><button className="button secondary compact" disabled={locked || host?.status !== "online"} onClick={() => void actions.start(state.revision)}>{actions.busy ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}{!state.enabled ? "Resume Mastermind" : "Start Mastermind"}</button></div>}
-    </> : <div className="mastermind-empty"><div><h3>{!state && !fleet.loading ? "Mastermind state is unavailable" : "Choose the agent at the center of your fleet"}</h3><p>{!state && !fleet.loading ? "Reconnect Relay or update its local controller to load Mastermind settings." : "Pick a machine, coding agent, and project folder. Your coordinator stays available here when you return."}</p></div>{state && <button className="button primary" onClick={openSettings} disabled={locked}><BrainCircuit size={16} />Set up Mastermind</button>}</div>}
+    </> : <div className="mastermind-empty"><div><h3>{!state && !fleet.loading ? "Mastermind state is unavailable" : "Your coordinator, on this computer"}</h3><p>{!state && !fleet.loading ? "Reconnect Relay or update its local controller to load Mastermind settings." : "Choose a locally installed coding agent. It keeps its conversation here and coordinates your connected machines through Relay."}</p></div>{state && <button className="button primary" onClick={openSettings} disabled={locked}><BrainCircuit size={16} />Set up Mastermind</button>}</div>}
     {!settings && <InlineError error={actions.error} />}
     {!state?.config && <InlineError error={state?.error} />}
     {actions.uncertain && <div className="mastermind-notice"><CircleAlert size={15} /><div><p>The previous request may have completed. Relay has not repeated it.</p><button className="text-button" disabled={actions.checking} onClick={() => void actions.check()}>{actions.checking ? "Checking…" : "Check Mastermind status"}</button></div></div>}
-    {settings && state && <MastermindSettings initial={state} fleet={fleet} actions={actions} onClose={() => setSettings(false)} onAdd={() => { setSettings(false); onAdd(); }} onHost={(target) => { setSettings(false); onHost(target); }} />}
+    {settings && state && <MastermindSettings initial={state} preferLocal={preferLocal} fleet={fleet} actions={actions} onClose={() => setSettings(false)} onAdd={() => { setSettings(false); onAdd(); }} onHost={(target) => { setSettings(false); onHost(target); }} />}
   </section>;
 }
 
-function MastermindSettings({ initial, fleet, actions, onClose, onAdd, onHost }: { initial: MastermindState; fleet: FleetState; actions: MastermindActions; onClose: () => void; onAdd: () => void; onHost: (host: Host) => void }) {
+function MastermindSettings({ initial, preferLocal, fleet, actions, onClose, onAdd, onHost }: { initial: MastermindState; preferLocal: boolean; fleet: FleetState; actions: MastermindActions; onClose: () => void; onAdd: () => void; onHost: (host: Host) => void }) {
   const [revision] = useState(initial.revision);
-  const [hostId, setHostId] = useState(initial.config?.hostId ?? fleet.hosts.find((host) => host.status === "online")?.id ?? fleet.hosts[0]?.id ?? "");
+  const [hostId, setHostId] = useState(preferLocal ? "local" : initial.config?.hostId ?? "local");
   const [harness, setHarness] = useState<"claude" | "codex">(initial.config?.harness ?? "claude");
   const [mode, setMode] = useState<AgentMode>(initial.config?.agentMode ?? "manual");
-  const [cwd, setCwd] = useState(initial.config?.cwd ?? "");
+  const [cwd, setCwd] = useState(preferLocal ? initial.local?.cwd ?? "" : initial.config?.cwd ?? initial.local?.cwd ?? "");
   const mounted = useRef(true);
   const submitting = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -117,8 +121,9 @@ function MastermindSettings({ initial, fleet, actions, onClose, onAdd, onHost }:
 
   return <Modal title={initial.config ? "Mastermind settings" : "Set up Mastermind"} subtitle="Choose where your coordinator runs. Its conversation stays on that machine." onClose={onClose}>
     <form className="modal-body form-stack mastermind-setup" onSubmit={(event) => void submit(event)}>
-      {!fleet.hosts.length ? <div className="mastermind-prerequisite"><Server size={18} /><div><p>Connect a machine, then choose an installed coding agent for Mastermind.</p><button type="button" className="text-button" onClick={onAdd}>Connect a machine <ArrowUpRight size={12} /></button></div></div> : <>
-        <label className="field"><span>Machine</span><select aria-label="Machine" value={hostId} disabled={busy} onChange={(event) => { setHostId(event.target.value); setCwd(""); }}>{!host && <option value={hostId}>Machine unavailable</option>}{fleet.hosts.map((item) => <option key={item.id} value={item.id}>{item.name}{item.status !== "online" ? " · Offline" : ""}</option>)}</select></label>
+      {!fleet.hosts.length ? <div className="mastermind-prerequisite"><Server size={18} /><div><p>This computer’s agent service is not available. Reconnect Relay or update the desktop app to set up local Mastermind.</p><button type="button" className="text-button" onClick={onAdd}>Connect another machine <ArrowUpRight size={12} /></button></div></div> : <>
+        <label className="field"><span>Machine</span><select aria-label="Machine" value={hostId} disabled={busy} onChange={(event) => { setHostId(event.target.value); setCwd(event.target.value === "local" ? initial.local?.cwd ?? "" : ""); }}>{!host && <option value={hostId}>{hostId === "local" ? "This computer · unavailable" : "Machine unavailable"}</option>}{fleet.hosts.map((item) => <option key={item.id} value={item.id}>{item.name}{item.status !== "online" ? " · Offline" : ""}</option>)}</select></label>
+        {!host && hostId === "local" && <div className="mastermind-prerequisite"><CircleAlert size={18} /><p>This computer’s agent service is not available. Reconnect or update Relay; another machine has not been selected automatically.</p></div>}
         {host && !capabilitiesCurrent && <div className="mastermind-prerequisite"><CircleAlert size={18} /><div><p>{host.status !== "online" ? "Reconnect this machine before setting up Mastermind." : "Waiting for current agent capabilities. Setup is unavailable while the machine state cannot be verified."}</p><button type="button" className="text-button" onClick={() => onHost(host)}>Open machine <ArrowUpRight size={12} /></button></div></div>}
         <fieldset className="harness-picker" disabled={busy}><legend>Coordinator</legend><div className="harness-options">{(["claude", "codex"] as const).map((id) => {
           const installed = capabilitiesCurrent && runtime?.harnesses.some((item) => item.id === id && item.installed);
@@ -128,7 +133,7 @@ function MastermindSettings({ initial, fleet, actions, onClose, onAdd, onHost }:
         {host && installed && !available && <div className="mastermind-prerequisite"><CircleAlert size={18} /><div><p>{selectedHarness && selectedHarness.authenticated === false ? `${provider(harness)} needs sign-in before Mastermind can start.` : `${provider(harness)} sign-in could not be verified. Check this machine's account before starting Mastermind.`}</p><button className="text-button" type="button" onClick={() => onHost(host)}>Sign in to {provider(harness)} <ArrowUpRight size={12} /></button></div></div>}
         <AgentModePicker value={mode} onChange={setMode} autoSupported={autoSupported} current={capabilitiesCurrent} disabled={busy} />
         {installed && <p className="mastermind-note">Relay verifies that this coding agent supports the selected mode before starting. Existing sessions keep running when this machine uses an older runtime.</p>}
-        {host && <FolderPicker key={host.id} host={host} value={cwd} onChange={setCwd} disabled={busy} />}
+        {host && (host.id === "local" ? <label className="field"><span>Project folder</span><input aria-label="Project folder" value={cwd} onChange={(event) => setCwd(event.target.value)} disabled={busy} required spellCheck={false} /><small>Mastermind’s working folder on this computer. Your existing agent sign-in is used.</small></label> : <FolderPicker key={host.id} host={host} value={cwd} onChange={setCwd} disabled={busy} />)}
         <p className="mastermind-note">Saving starts Mastermind using this agent’s existing account. It can coordinate work through Relay and waits for your instructions. Closing Relay keeps the session running.</p>
         {initial.config && <p className="mastermind-note">Changing the machine, agent, folder, or mode starts a new coordinator. The previous session stays in your session list.</p>}
       </>}

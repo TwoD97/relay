@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -22,9 +23,9 @@ func (s *Server) maintainHostHarness(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	host, exists := s.store.get(id)
-	local := id == "local" && s.config.LocalSocket != ""
+	local := id == "local" && s.hasLocalMastermind()
 	if local {
-		host, exists = Host{ID: "local", Target: s.config.LocalSocket, Status: "online"}, true
+		host, exists = Host{ID: "local", Target: s.localMastermindIdentity(), Status: "online"}, true
 	}
 	l := s.links[id]
 	if !exists {
@@ -180,6 +181,9 @@ func runtimeJSON(ctx context.Context, client *http.Client, method, path string, 
 	// Mutations retain the smaller response cap.
 	if method == http.MethodGet && path == "/api/sessions" {
 		limit = 512 << 10
+	}
+	if method == http.MethodGet && strings.HasPrefix(path, "/api/sessions/") && strings.HasSuffix(path, "/history") {
+		limit = 2 << 20
 	}
 	data, err = io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {

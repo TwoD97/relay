@@ -19,8 +19,8 @@ menu. It installs for the current user, supplies an uninstaller, and sets up
 Microsoft WebView2 when needed. No WSL is required. Close an existing Relay
 window before opening the updated app. Saved hosts, Mastermind settings, and
 appearance are shared with the portable version and are kept across upgrades.
-Windows clients manage Linux SSH hosts; local Windows terminal sessions are not
-implemented.
+Windows also runs a local Mastermind through a native ConPTY service. General
+project terminals run on connected Linux hosts; WSL is not needed for either.
 
 The optional **portable ZIP** has the same application features. Extract it to a
 writable folder and run `relay-desktop.exe`, keeping its adjacent resources
@@ -95,21 +95,38 @@ provider CLI manages its own authenticated credentials in its normal location.
 Automatic Node installation uses glibc Linux builds; musl-only hosts need a
 compatible existing Node installation.
 
+Click a terminal title or its pencil icon to rename it. **Enter** saves and
+**Escape** cancels; the process, history and terminal control stay intact.
+
+Screenshots from Snipping Tool can be pasted with **Ctrl+V** into a controlling
+agent terminal. Relay transfers the PNG/JPEG to that session's machine and
+inserts its path; add your message and press Enter yourself. Use **Image** to
+choose a saved screenshot. No clipboard image is read automatically.
+
 ### Mastermind
 
-Fleet overview includes an interactive **Mastermind** workspace. Choose its
-machine, signed-in Claude Code or Codex harness, working folder, and Manual or
-Auto permission mode, then choose **Save and start Mastermind**. The agent runs
-on that machine and appears directly in the overview. Describe your task in its
-terminal; its Relay instructions explain how to discover named machines and
-coordinate their sessions. This is separate from the optional summary observer.
+Open **Mastermind** in the sidebar to configure a signed-in Claude Code or Codex
+harness, working folder, and Manual or Auto permission mode. New configurations
+default to **This computer**, including native Windows. Install and sign in to
+the local harness from its machine view; remote or WSL credentials are never
+copied. Existing remote coordinators remain attached until you choose **Switch
+to local**, which preserves their sessions.
+
+Mastermind has a dedicated workspace with multiple HTML pages, a task board, and
+its own terminal. The bundled [relay-mastermind skill](skills/relay-mastermind/SKILL.md)
+explains how the agent publishes pages and task updates with `relay workspace`,
+and delegates through the controller's connected hosts. Pages support static
+HTML/CSS and embedded images in a restricted sandbox; scripts, external requests,
+and app control from a page are disabled. Tasks are maintained by Mastermind or
+the user, separately from provider-native todos and the optional summary observer.
 
 Relay saves this choice and reconnects to the same session when the app opens.
 Closing Relay leaves it running. **Settings** lets you change the choice later;
 switching starts a new conversation and preserves the previous session in its
 machine's session list. An exited coordinator is shown as finished until you
-explicitly start a new one. **Pause Mastermind** disconnects the overview panel;
-the agent keeps running on its machine.
+explicitly start a new one. **Pause Mastermind** disconnects its panel and revokes
+its app-control capability; the provider process keeps running. Pages and tasks
+are saved independently of that process and survive controller restarts.
 
 Startup belongs to the controller, so reloading a view or opening another window
 does not create another agent. Relay records an explicit launch identity before
@@ -121,7 +138,8 @@ Mastermind inside a separate persistent terminal without restarting the daemon
 or its existing sessions. It verifies the provider's supported flags before
 launch and checks a durable receipt before attaching. This compatibility session
 uses terminal permission prompts; approval cards require native Mastermind
-support in the running runtime. If setup needs attention, the overview offers
+support in the running runtime. Native Windows Mastermind currently uses the
+provider's terminal permission prompts. If setup needs attention, its view offers
 the relevant sign-in, folder, runtime, or **Check setup** action.
 
 The terminal is a real PTY. In **Start a session**, choose **Browse** to select an
@@ -144,6 +162,11 @@ Ctrl+− / Ctrl++, to change text size; Ctrl+0 resets it. The size is saved for 
 client. Window resizing and display scaling refit the controlling terminal.
 Watching windows keep the shared session's dimensions and can scroll in both
 directions when the screen is larger than their available space.
+
+**Expand terminal to full window** gives the terminal the content area while
+keeping its existing connection. **Open terminal in new window** creates an
+independent desktop viewer of the same session. Closing either window leaves
+the process running; each session still has one writer at a time.
 
 Opening a terminal watches it. Clicking or focusing it claims available exclusive
 typing and resize access; **Take control** also remains available. Other desktop windows

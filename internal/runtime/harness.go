@@ -35,7 +35,15 @@ type Harness struct {
 }
 
 func (s *Server) environment() []string {
-	env := os.Environ()
+	env := make([]string, 0, len(os.Environ()))
+	// Controller capabilities belong only to explicitly configured Mastermind
+	// launches. A daemon started from an agent must not pass them to other jobs.
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if name != "RELAY_CONTROLLER_STATE" && name != "RELAY_AGENT_CAPABILITY_FILE" {
+			env = append(env, entry)
+		}
+	}
 	paths := []string{filepath.Join(s.stateDir, "tools", nodeArchiveRoot(), "bin")}
 	paths = append(paths, filepath.Join(s.stateDir, "bin"))
 	paths = append(paths, filepath.SplitList(os.Getenv("PATH"))...)

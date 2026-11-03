@@ -5,3 +5,4 @@
 /web/node_modules/
 /.test-artifacts/
 __pycache__/
+*.tsbuildinfo

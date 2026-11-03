@@ -110,7 +110,29 @@ export interface MastermindState {
   blocker?: "runtime" | "harness" | "folder" | "worker" | "host" | "identity" | "storage" | "launch";
   session?: Session;
   updatedAt: string;
+  local?: { hostId: "local"; cwd: string };
 }
+
+export type MastermindTaskStatus = "todo" | "doing" | "blocked" | "done";
+export interface MastermindTask {
+  id: string;
+  title: string;
+  detail: string;
+  status: MastermindTaskStatus;
+  hostId?: string;
+  sessionId?: string;
+  pageId?: string;
+  updatedAt: string;
+}
+export interface MastermindPageInfo { id: string; title: string; updatedAt: string }
+export interface MastermindPage extends MastermindPageInfo { html: string; revision: number }
+export interface MastermindWorkspaceState {
+  revision: number;
+  updatedAt: string;
+  pages: MastermindPageInfo[];
+  tasks: MastermindTask[];
+}
+export interface MastermindWorkspaceMutation { workspace: MastermindWorkspaceState; page?: MastermindPage; task?: MastermindTask }
 
 export interface ProjectContextReport {
   path: string;
@@ -151,7 +173,10 @@ export interface ObserverState {
   providers: { id: "claude" | "codex"; supported: boolean; detail?: string }[];
 }
 
+export interface RuntimeHealth { protocol: number; version: string; platform?: string; capabilities?: Record<string, boolean> }
 export interface RuntimeState {
+  health?: RuntimeHealth;
+  healthError?: string;
   sessions: Session[];
   harnesses: Harness[];
   error?: string;
@@ -180,4 +205,7 @@ export interface FleetState {
   reconnectError?: string;
 }
 
-export type Selection = { host: string; session?: string; view?: never } | { view: "activity"; host?: never; session?: never } | null;
+export type Selection = { host: string; session?: string; view?: never; expanded?: boolean; page?: never }
+  | { view: "activity"; host?: never; session?: never; expanded?: never; page?: never }
+  | { view: "mastermind"; host?: never; session?: never; expanded?: boolean; page?: string }
+  | null;

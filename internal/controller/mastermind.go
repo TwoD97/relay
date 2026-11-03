@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func (s *Server) getMastermind(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.mastermind.current().MastermindState)
+	writeJSON(w, http.StatusOK, s.mastermindState())
 }
 
 func (s *Server) configureMastermind(w http.ResponseWriter, r *http.Request) {
@@ -34,11 +35,11 @@ func (s *Server) configureMastermind(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	host, exists := s.store.get(request.HostID)
-	if request.HostID == "local" && s.config.LocalSocket != "" {
-		host, exists = Host{ID: "local", Target: s.config.LocalSocket}, true
+	if request.HostID == "local" && s.hasLocalMastermind() {
+		host, exists = Host{ID: "local", Target: s.localMastermindIdentity()}, true
 	}
 	if !exists || s.ctx.Err() != nil {
-		writeError(w, 409, "Choose an existing machine; this controller has no local runtime on Windows")
+		writeError(w, 409, "Choose an available machine. The local Mastermind service may need setup.")
 		return
 	}
 	store := s.mastermind
@@ -55,7 +56,7 @@ func (s *Server) configureMastermind(w http.ResponseWriter, r *http.Request) {
 	}
 	same := current.Config != nil && *current.Config == request.MastermindConfig && current.HostTarget == host.Target && current.HostPort == host.Port && current.HostCreatedAt.Equal(host.CreatedAt)
 	if same && current.Enabled {
-		writeJSON(w, 200, cloneMastermind(current).MastermindState)
+		writeJSON(w, 200, s.withMastermindLocal(cloneMastermind(current).MastermindState))
 		return
 	}
 	next := cloneMastermind(current)
@@ -73,7 +74,7 @@ func (s *Server) configureMastermind(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "Could not save Mastermind settings; no new start request was dispatched")
 		return
 	}
-	writeJSON(w, 202, cloneMastermind(store.record).MastermindState)
+	writeJSON(w, 202, s.withMastermindLocal(cloneMastermind(store.record).MastermindState))
 	s.wakeMastermind()
 }
 
@@ -113,7 +114,7 @@ func (s *Server) changeMastermind(w http.ResponseWriter, r *http.Request, disabl
 			store.record.UpdatedAt = time.Now().UTC()
 			s.wakeMastermind()
 		}
-		writeJSON(w, 200, cloneMastermind(store.record).MastermindState)
+		writeJSON(w, 200, s.withMastermindLocal(cloneMastermind(store.record).MastermindState))
 		return
 	}
 	next := cloneMastermind(current)
@@ -134,7 +135,7 @@ func (s *Server) changeMastermind(w http.ResponseWriter, r *http.Request, disabl
 		writeError(w, 500, "Could not save Mastermind settings; no start request was dispatched")
 		return
 	}
-	writeJSON(w, 202, cloneMastermind(store.record).MastermindState)
+	writeJSON(w, 202, s.withMastermindLocal(cloneMastermind(store.record).MastermindState))
 	s.wakeMastermind()
 }
 
@@ -182,7 +183,7 @@ func (s *Server) mastermindClient(rec mastermindRecord) (*http.Client, *transpor
 		return nil, nil, false, s.ctx.Err()
 	}
 	if rec.Config.HostID == "local" {
-		if s.config.LocalSocket == "" || rec.HostTarget != s.config.LocalSocket {
+		if !s.hasLocalMastermind() || rec.HostTarget != s.localMastermindIdentity() {
 			return nil, nil, false, errors.New("The local runtime identity changed. Choose the Mastermind machine again; the previous session is preserved.")
 		}
 	} else {
@@ -317,7 +318,8 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 	var health struct {
 		Home         string `json:"home"`
 		Capabilities struct {
-			MastermindV1 bool `json:"mastermindV1"`
+			MastermindV1      bool `json:"mastermindV1"`
+			LocalMastermindV1 bool `json:"localMastermindV1"`
 		} `json:"capabilities"`
 	}
 	if json.Unmarshal(data, &health) != nil {
@@ -349,7 +351,21 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		return
 	}
 	query := transport.DirectoryQuery{Path: rec.Config.Cwd}
-	if (query.Path == "~" || strings.HasPrefix(query.Path, "~/")) && (!strings.HasPrefix(health.Home, "/") || (transport.DirectoryQuery{Path: health.Home}).Validate() != nil) {
+	local := rec.Config.HostID == "local"
+	absolute := func(value string) bool {
+		if local {
+			return filepath.IsAbs(value)
+		}
+		return strings.HasPrefix(value, "/")
+	}
+	validFolder := func(value string) bool {
+		q := transport.DirectoryQuery{Path: value}
+		if local {
+			return validateLocalDirectoryQuery(q) == nil
+		}
+		return q.Validate() == nil
+	}
+	if (query.Path == "~" || strings.HasPrefix(query.Path, "~/")) && (!absolute(health.Home) || !validFolder(health.Home)) {
 		blocked("folder", "The runtime did not report a valid home folder. Choose an absolute working folder.")
 		return
 	}
@@ -357,6 +373,9 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 		query.Path = health.Home
 	} else if strings.HasPrefix(query.Path, "~/") {
 		query.Path = path.Join(health.Home, query.Path[2:])
+		if local {
+			query.Path = filepath.Join(health.Home, rec.Config.Cwd[2:])
+		}
 	}
 	var directory transport.DirectoryListing
 	if rec.Config.HostID == "local" {
@@ -366,12 +385,12 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 	} else {
 		err = errors.New("SSH connection is unavailable")
 	}
-	if err != nil || !strings.HasPrefix(directory.Path, "/") || (transport.DirectoryQuery{Path: directory.Path}).Validate() != nil {
+	if err != nil || !absolute(directory.Path) || !validFolder(directory.Path) {
 		blocked("folder", "Could not resolve the working folder. Open Mastermind settings and choose an existing folder.")
 		return
 	}
 	execution, workerPath, workerStateDir := "native", "", ""
-	if !health.Capabilities.MastermindV1 {
+	if !health.Capabilities.MastermindV1 || local && !health.Capabilities.LocalMastermindV1 {
 		execution = "worker"
 		workerPath, workerStateDir, err = s.prepareMastermindWorker(ctx, rec, connection)
 		if err != nil {
@@ -402,6 +421,23 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 	} else {
 		body["agentMode"], body["mastermindId"] = rec.Config.AgentMode, token
 	}
+	if local {
+		environment, prepareErr := s.prepareLocalMastermind(rec)
+		if prepareErr != nil {
+			s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
+				next.Phase, next.Status, next.Stage, next.Error, next.Blocker = "rejected", "blocked", "Local Mastermind setup needs attention", prepareErr.Error(), "launch"
+			})
+			return
+		}
+		if execution != "worker" {
+			body["mastermindEnvironment"] = environment
+			if s.config.LocalAgentDir != "" {
+				delete(body, "mastermindEnvironment")
+				body["env"] = environment
+				body["prompt"] = localMastermindInstruction
+			}
+		}
+	}
 	data, err = runtimeJSON(ctx, client, "POST", "/api/sessions", body)
 	if err != nil {
 		var rejection *runtimeHTTPError
@@ -430,6 +466,18 @@ func (s *Server) createMastermind(rec mastermindRecord, client *http.Client, con
 }
 
 func (s *Server) dispatchMastermindWorker(ctx context.Context, rec mastermindRecord, session MastermindSession, client *http.Client) {
+	var prefix []string
+	if rec.Config.HostID == "local" {
+		environment, err := s.prepareLocalMastermind(rec)
+		if err != nil {
+			s.mastermind.notice(rec.Revision, "blocked", "Local Mastermind setup needs attention", err.Error(), "launch")
+			return
+		}
+		prefix = []string{"env"}
+		for _, key := range []string{"RELAY_CONTROLLER_STATE", "RELAY_AGENT_CAPABILITY_FILE", "RELAY_BIN"} {
+			prefix = append(prefix, key+"="+environment[key])
+		}
+	}
 	// A returned shell identity must be durable before any input can execute.
 	if !s.mastermind.transition(rec.Revision, func(next *mastermindRecord) {
 		next.Phase, next.Session = "worker-prepared", &session
@@ -446,7 +494,7 @@ func (s *Server) dispatchMastermindWorker(ctx context.Context, rec mastermindRec
 	if !dispatched.Enabled || dispatched.Revision != rec.Revision || dispatched.Token != rec.Token || dispatched.Session == nil || dispatched.Session.ID != session.ID || !dispatched.Session.CreatedAt.Equal(session.CreatedAt) {
 		return
 	}
-	command := "exec " + mastermindShellArguments(append([]string{dispatched.WorkerPath}, mastermindWorkerArgs(dispatched, "run")...)) + "\r"
+	command := "exec " + mastermindShellArguments(append(append(prefix, dispatched.WorkerPath), mastermindWorkerArgs(dispatched, "run")...)) + "\r"
 	err := startMaintenanceInput(ctx, client, session.ID, command)
 	message := "Checking the durable worker receipt before connecting. No command will be replayed."
 	if err != nil {
