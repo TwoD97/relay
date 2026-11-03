@@ -112,8 +112,12 @@ the local harness from its machine view; remote or WSL credentials are never
 copied. Existing remote coordinators remain attached until you choose **Switch
 to local**, which preserves their sessions.
 
-Mastermind has a dedicated workspace with multiple HTML pages, a task board, and
-its own terminal. The bundled [relay-mastermind skill](skills/relay-mastermind/SKILL.md)
+Mastermind has four dedicated views: **Overview** for progress and next steps,
+**Pages** for full-size HTML dashboards and reports, **Tasks** for a searchable
+board with status filters, and **Terminal** for the coordinator's live session.
+Switching views preserves the session; returning to Terminal reconnects its
+viewer. Full-window and separate desktop windows remain available. The bundled
+[relay-mastermind skill](skills/relay-mastermind/SKILL.md)
 explains how the agent publishes pages and task updates with `relay workspace`,
 and delegates through the controller's connected hosts. Pages support static
 HTML/CSS and embedded images in a restricted sandbox; scripts, external requests,

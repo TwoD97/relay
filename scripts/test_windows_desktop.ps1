@@ -515,7 +515,8 @@ canvas.toBlob(async blob=>{
 
 function Test-LocalMastermindRendering {
     Click-Button 'Mastermind'
-    [void](Wait-Until { Body-Contains 'Mastermind workspace' } 'dedicated local Mastermind page')
+    [void](Wait-Until { Execute-JS 'return document.querySelector(".workspace-heading h1")?.textContent==="Mastermind"&&document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent==="Overview";' } 'local Mastermind overview')
+    Assert-True (Execute-JS 'return !document.querySelector(".terminal-shell");') 'Mastermind overview unexpectedly mounted a terminal'
     Click-Button 'Set up Mastermind'
     [void](Wait-Until { Execute-JS 'return !!document.querySelector("[role=dialog] input[aria-label=\"Claude Code\"]:not(:disabled)") && [...document.querySelectorAll("[role=dialog] button")].some(b=>b.textContent.trim()==="Save and start Mastermind"&&!b.disabled);' } 'fixture provider capability and login-status checks')
     Assert-True (Execute-JS 'return document.querySelector("[aria-label=Machine]").value === "local";') 'New coordinator did not default to this computer'
@@ -524,6 +525,7 @@ function Test-LocalMastermindRendering {
     $coordinator=(API-JSON '/api/state').mastermind
     $session=$coordinator.session.id
     Assert-True ($session -cmatch '^[0-9a-f]{32}$') 'Invalid local fixture session identity'
+    Select-MastermindView 'Terminal'
     [void](Wait-Until { Terminal-Contains 'READY' } 'real ConPTY fixture output painted in Mastermind')
     Click-Selector '.mastermind-terminal .terminal-canvas'
     [void](Wait-Until { Body-Contains 'Controlling' } 'Mastermind direct terminal lease')
@@ -545,14 +547,23 @@ function Test-LocalMastermindRendering {
     [IO.File]::WriteAllText($html,'<h1>LOCAL MASTER PLAN</h1><p>Native fixture evidence.</p><script>window.parent.FIXTURE_ESCAPE=true</script>',[Text.UTF8Encoding]::new($false))
     $created=Invoke-FixtureAgentCLI @('workspace','pages','create','--revision',[string]$workspace.revision,'--title','Native fixture plan','--html-file',$html)
     $task=Invoke-FixtureAgentCLI @('workspace','tasks','create','--revision',[string]$created.workspace.revision,'--title','Verify local coordinator','--status','doing','--page',$created.page.id,'--host','local','--session',$session)
-    [void](Wait-Until { Body-Contains 'Verify local coordinator' } 'agent-authored native task board')
+    Select-MastermindView 'Pages'
+    Assert-True (Execute-JS 'return !document.querySelector(".terminal-shell");') 'Pages view unexpectedly retained an interactive terminal'
     [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe");return !!frame&&frame.getAttribute("sandbox")===""&&frame.srcdoc.includes("LOCAL MASTER PLAN")&&!frame.srcdoc.includes("<script")&&!window.FIXTURE_ESCAPE;' } 'sandboxed agent-authored HTML page')
     $frame=Find-Element 'css selector' '.canvas-document iframe'
     [void](Session-WD POST '/frame' @{id=@{'element-6066-11e4-a52e-4f735466cecf'=$frame}})
     try {
         [void](Wait-Until { Execute-JS 'const heading=document.querySelector("h1");if(!heading||heading.textContent!=="LOCAL MASTER PLAN")return false;const r=heading.getBoundingClientRect(),style=getComputedStyle(heading);return r.width>0&&r.height>0&&style.visibility!=="hidden"&&style.display!=="none";' } 'actual sandboxed document heading renders')
     } finally { [void](Session-WD POST '/frame' @{id=$null}) }
-    Assert-True (Terminal-Contains 'RESULT native-mastermind-after-image') 'Workspace changes lost the running terminal screen'
+    Save-Screenshot 'native-local-mastermind-pages.png'
+    Select-MastermindView 'Tasks'
+    [void](Wait-Until { Execute-JS 'const task=document.querySelector("article[aria-label=\"Verify local coordinator\"]");return !!task&&task.querySelector("select")?.value==="doing";' } 'agent-authored native task board')
+    Assert-True (Execute-JS 'return !document.querySelector(".terminal-shell,.canvas-document iframe");') 'Tasks view unexpectedly retained another workspace view'
+    Save-Screenshot 'native-local-mastermind-tasks.png'
+    Select-MastermindView 'Terminal'
+    [void](Wait-Until { Terminal-Contains 'RESULT native-mastermind-after-image' } 'returning from pages and tasks replays the original terminal screen')
+    $afterViews=(API-JSON '/api/state').mastermind
+    Assert-True ($afterViews.session.id -eq $session -and $afterViews.session.createdAt -eq $coordinator.session.createdAt) 'Changing views replaced the local coordinator'
     Save-Screenshot 'native-local-mastermind.png'
 
     # Open through the real UI command. A detached view is a separate process
@@ -576,12 +587,21 @@ function Test-LocalMastermindRendering {
     Assert-True ($detached.WaitForExit(10000)) 'Detached window did not close normally'
     Start-AppSession
     Click-Button 'Mastermind'
+    Select-MastermindView 'Terminal'
     [void](Wait-Until { Terminal-Contains 'RESULT native-mastermind-after-image' } 'native local coordinator replay after reopening')
     $after=(API-JSON '/api/state').mastermind
     Assert-True ($after.session.id -eq $session -and $after.session.createdAt -eq $coordinator.session.createdAt) 'Reopening duplicated or replaced Mastermind'
     Assert-True ((API-JSON '/api/mastermind/workspace').revision -eq $task.workspace.revision) 'Reopening lost authored pages or tasks'
     Save-Screenshot 'native-local-mastermind-reopened.png'
     Write-Host 'PASS: local ConPTY Mastermind, private CLI canvas/tasks, sandbox, independent native window, lease and close/reopen persistence; no provider account or inference used'
+}
+
+function Select-MastermindView([string]$Section) {
+    Assert-True ($Section -in @('Overview','Pages','Tasks','Terminal')) 'Unknown test-owned Mastermind section'
+    [void](Wait-Until { Execute-JS 'return [...document.querySelectorAll(".workspace-view-navigation button > span")].some(label=>label.textContent===arguments[0]);' @($Section) } 'Mastermind section navigation is ready')
+    $element=Find-Element xpath "//nav[@aria-label='Mastermind views']/button[span[normalize-space(.)='$Section']]"
+    [void](Session-WD POST "/element/$element/click" @{})
+    [void](Wait-Until { Execute-JS 'return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];' @($Section) } "Mastermind $Section view")
 }
 
 function App-Identity {

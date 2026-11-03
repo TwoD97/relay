@@ -305,12 +305,12 @@ test("an extreme viewport and minimum font stay within the runtime resize limits
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
 });
 
-test("the Mastermind dock fills a wide nested panel and follows full-window resize without remount", async ({ page }) => {
+test("the Mastermind terminal fills a wide nested panel and follows full-window resize without remount", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const fixture = await mockFleet(page, { terminalOutput: "DOCK_PRESERVED", terminalGeometry: { cols: 8, rows: 14 }, sessionModes: { codex: ["manual", "auto"] } });
   Object.assign(fixture.mastermind, { revision: 1, enabled: true, config: { hostId: "dev", harness: "codex", agentMode: "manual", cwd: "/home/dev/projects/relay" } });
   fixture.attachMastermind();
-  await page.goto("/#mastermind");
+  await page.goto("/#mastermind/terminal");
   await expect(page.locator(".xterm-rows")).toContainText("DOCK_PRESERVED");
   await expect(page.getByRole("status", { name: "Terminal dimensions" })).toHaveText("8 × 14");
   expect(fixture.terminalMessages).toEqual([]);
@@ -336,7 +336,7 @@ test("the Mastermind dock fills a wide nested panel and follows full-window resi
   };
   await fills();
   await page.getByRole("button", { name: "Expand terminal to full window", exact: true }).click();
-  await expect(page).toHaveURL(/#mastermind\/window$/);
+  await expect(page).toHaveURL(/#mastermind\/terminal\/window$/);
   await fills();
   await page.getByRole("button", { name: "Restore workspace layout", exact: true }).click();
   await fills();

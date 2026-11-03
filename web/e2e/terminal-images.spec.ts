@@ -324,7 +324,7 @@ test("an occupied terminal cannot read images, upload files, or steal control", 
 test("Mastermind images use the exact verified local session target", async ({ page }) => {
   const session = { ...work, id: "coordinator", title: "Mastermind", harness: "codex" as const, agentMode: "manual" as const, mastermindId: "c".repeat(32) };
   const fixture = await mockFleet(page, { terminalOutput: "\u001b[?2004hReady\r\n", sessions: { local: [session], dev: [structuredClone(work)] }, mastermind: { revision: 1, enabled: true, status: "running", stage: "Connected", config: { hostId: "local", harness: "codex", agentMode: "manual", cwd: session.cwd }, session: structuredClone(session), updatedAt: session.updatedAt } });
-  await page.goto("/#mastermind");
+  await page.goto("/#mastermind/terminal");
   await page.locator(".terminal-canvas").click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   await clipboard(page);

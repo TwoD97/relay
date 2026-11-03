@@ -166,7 +166,7 @@ test("a delayed rename response cannot steal a newer session navigation", async 
 test("mutable Mastermind title and workspace labels cannot detach its verified session", async ({ page }) => {
   const session: Session = { ...work, id: "coordinator", harness: "codex", mastermindId: "c".repeat(32), agentMode: "manual", title: "Mastermind" };
   const fixture = await mockFleet(page, { sessions: { local: [structuredClone(session)], dev: [] }, mastermind: { revision: 1, enabled: true, status: "running", stage: "Connected", config: { hostId: "local", harness: "codex", agentMode: "manual", cwd: session.cwd }, session: structuredClone(session), updatedAt: session.updatedAt } });
-  await page.goto("/#mastermind");
+  await page.goto("/#mastermind/terminal");
   await page.locator(".terminal-canvas").click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   const original = await page.locator(".xterm").elementHandle();

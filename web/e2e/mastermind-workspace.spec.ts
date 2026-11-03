@@ -14,18 +14,20 @@ function running() {
   const mastermind: MastermindState = { revision: 1, enabled: true, status: "running", stage: "Connected", config: { hostId: "dev", cwd: session.cwd, harness: "codex", agentMode: "manual" }, session, local: { hostId: "local", cwd: "/home/local/relay project" }, updatedAt: now };
   return { mastermind, sessions: { dev: [session], local: [] }, sessionModes: { codex: ["manual" as const, "auto" as const] } };
 }
-async function workspace(page: Page) {
-  await page.goto("/#mastermind");
-  await expect(page.getByRole("heading", { name: "Mastermind workspace", exact: true })).toBeVisible();
+async function workspace(page: Page, view: "overview" | "pages" | "tasks" | "terminal" = "pages") {
+  await page.goto(view === "overview" ? "/#mastermind" : `/#mastermind/${view}`);
+  await expect(page.getByRole("heading", { name: "Mastermind", exact: true, level: 1 })).toBeVisible();
 }
+const views = (page: Page) => page.getByRole("navigation", { name: "Mastermind views", exact: true });
 
 test("canvas pages and task changes share revisions without sending terminal commands", async ({ page }) => {
   const fixture = await mockFleet(page, { ...initial(), ...running() });
   await workspace(page);
   await expect(page.frameLocator('iframe[title="Plan canvas"]').getByRole("heading", { name: "Release plan" })).toBeVisible();
-  await expect(page.getByText("Watching", { exact: true })).toBeVisible();
-  const terminal = await page.locator(".xterm").elementHandle();
+  await expect(page.locator(".xterm")).toHaveCount(0);
+  expect(fixture.attachments).toEqual([]);
   await page.screenshot({ path: test.info().outputPath("mastermind-workspace.png"), fullPage: true });
+  await views(page).getByRole("button", { name: "Tasks", exact: true }).click();
   await page.getByRole("button", { name: "New task", exact: true }).click();
   const task = page.getByRole("dialog", { name: "New task", exact: true });
   await task.getByLabel("Task title", { exact: true }).fill("Verify release");
@@ -40,12 +42,13 @@ test("canvas pages and task changes share revisions without sending terminal com
   await expect.poll(() => fixture.workspace.tasks[0]?.status).toBe("doing");
   expect(fixture.mutations[1].body).toMatchObject({ revision: 3, title: "Verify release", detail: "Check the rollback plan before shipping.", status: "doing", pageId: id1 });
   expect(fixture.mutations[1].body).not.toHaveProperty("updatedAt");
+  await views(page).getByRole("button", { name: "Pages", exact: true }).click();
   await page.getByRole("tab", { name: "Architecture", exact: true }).click();
   await expect(page.frameLocator('iframe[title="Architecture canvas"]').getByRole("heading", { name: "System map" })).toBeVisible();
   await page.getByRole("tab", { name: "Architecture", exact: true }).press("ArrowLeft");
   await expect(page.getByRole("tab", { name: "Plan", exact: true })).toHaveAttribute("aria-selected", "true");
-  expect(await terminal!.evaluate((element) => element.isConnected && element === document.querySelector(".xterm"))).toBe(true);
-  expect(fixture.attachments).toHaveLength(1);
+  await expect(page.locator(".xterm")).toHaveCount(0);
+  expect(fixture.attachments).toEqual([]);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
   await page.getByRole("button", { name: "Delete canvas page", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete page", exact: true }).click();
@@ -89,7 +92,7 @@ test("canvas isolates hostile HTML, navigation, native IPC, and every external a
   await expect(frame.locator("script,iframe,object,form,input,a,svg,meta[http-equiv=refresh]")).toHaveCount(0);
   await expect(frame.locator("body")).toContainText("Click me");
   await frame.getByRole("heading", { name: "Safe content", exact: true }).click();
-  await expect(page).toHaveURL(/#mastermind$/);
+  await expect(page).toHaveURL(new RegExp(`#mastermind/pages(?:/${id1})?$`));
   await expect.poll(() => page.evaluate(() => (window as unknown as { HACKED?: boolean }).HACKED)).toBeUndefined();
   const body = frame.locator("body");
   expect(await body.evaluate(() => { try { return window.parent.document.title; } catch { return "isolated"; } })).toBe("isolated");
@@ -105,12 +108,15 @@ test("unknown workspace write is not replayed after navigation or reload", async
   const fixture = await mockFleet(page, initial());
   let writes = 0;
   await page.route("**/api/mastermind/workspace/tasks", (route) => { writes++; return route.abort("failed"); });
-  await workspace(page);
+  await workspace(page, "tasks");
   await page.getByRole("button", { name: "New task", exact: true }).click();
   await page.getByLabel("Task title", { exact: true }).fill("One uncertain task");
   await page.getByRole("button", { name: "Save task", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("has not been repeated");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await views(page).getByRole("button", { name: "Pages", exact: true }).click();
+  await expect(page.getByRole("button", { name: "New page", exact: true })).toBeDisabled();
+  await views(page).getByRole("button", { name: "Tasks", exact: true }).click();
   await page.reload();
   await expect(page.getByText("The previous change is unconfirmed.", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "New task", exact: true })).toBeDisabled();
@@ -133,7 +139,7 @@ test("a stale editor retains its draft and never overwrites an agent update", as
 
 test("new Mastermind chooses this computer and never substitutes the first remote", async ({ page }) => {
   const fixture = await mockFleet(page, { hosts: [structuredClone(remote), structuredClone(local)], mastermind: { revision: 0, enabled: false, status: "unconfigured", stage: "Choose", local: { hostId: "local", cwd: "C:\\Users\\fixture\\Relay project" }, updatedAt: now } });
-  await workspace(page);
+  await workspace(page, "overview");
   await page.getByRole("button", { name: "Set up Mastermind", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Set up Mastermind", exact: true });
   await expect(dialog.getByLabel("Machine", { exact: true })).toHaveValue("local");
@@ -145,7 +151,7 @@ test("new Mastermind chooses this computer and never substitutes the first remot
 
 test("an unavailable local service stays explicit and switching an existing remote preserves its session", async ({ page }) => {
   const fixture = await mockFleet(page, { ...running(), hosts: [structuredClone(remote)] });
-  await workspace(page);
+  await workspace(page, "overview");
   await page.getByRole("button", { name: "Switch to local", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Mastermind settings", exact: true });
   await expect(dialog.getByLabel("Machine", { exact: true })).toHaveValue("local");
@@ -198,7 +204,7 @@ test("attention arrivals keep the machine tree fixed and all notifications reach
   expect(fixture.mutations).toEqual([]);
 });
 
-test("a late page read cannot replace the selected page or remount the terminal", async ({ page }) => {
+test("a late page read cannot replace the selected page or attach a terminal", async ({ page }) => {
   const fixture = await mockFleet(page, { ...initial(), ...running() });
   let release!: () => void;
   let requested = false;
@@ -214,7 +220,7 @@ test("a late page read cannot replace the selected page or remount the terminal"
   release();
   await expect(page.getByRole("tab", { name: "Architecture", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator('iframe[title="Plan canvas"]')).toHaveCount(0);
-  expect(fixture.attachments).toHaveLength(1);
+  expect(fixture.attachments).toEqual([]);
   expect(fixture.mutations).toEqual([]);
 });
 
@@ -231,7 +237,6 @@ test("a canvas page read times out and only explicit reload retries it", async (
   });
   await workspace(page);
   await expect(page.getByText("Loading canvas page…", { exact: true })).toBeVisible();
-  const terminal = await page.locator(".xterm").elementHandle();
   await expect(page.getByText("The request timed out. Check the machine’s connection and try again.", { exact: true })).toBeVisible({ timeout: 11000 });
   await expect(page.getByText("Loading canvas page…", { exact: true })).toHaveCount(0);
   expect(reads).toBe(1);
@@ -239,8 +244,8 @@ test("a canvas page read times out and only explicit reload retries it", async (
   await page.getByRole("button", { name: "Reload page", exact: true }).click();
   await expect(page.frameLocator('iframe[title="Plan canvas"]').getByRole("heading", { name: "Release plan" })).toBeVisible();
   expect(reads).toBe(2);
-  expect(await terminal!.evaluate((element) => element.isConnected && element === document.querySelector(".xterm"))).toBe(true);
-  expect(fixture.attachments).toHaveLength(1);
+  await expect(page.locator(".xterm")).toHaveCount(0);
+  expect(fixture.attachments).toEqual([]);
   expect(fixture.mutations).toEqual([]);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
 });
@@ -272,7 +277,7 @@ test("a late page save cannot reopen its editor or steal a changed page selectio
 test("switching an existing remote coordinator to local is explicit and preserves its old PTY", async ({ page }) => {
   const fixture = await mockFleet(page, running());
   const previous = structuredClone(fixture.sessions.dev[0]);
-  await workspace(page);
+  await workspace(page, "overview");
   await page.getByRole("button", { name: "Switch to local", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Mastermind settings", exact: true });
   await expect(dialog.getByLabel("Machine", { exact: true })).toHaveValue("local");
@@ -281,7 +286,8 @@ test("switching an existing remote coordinator to local is explicit and preserve
   expect(fixture.mutations).toHaveLength(1);
   expect(fixture.mutations[0].body).toMatchObject({ hostId: "local", harness: "codex", agentMode: "manual" });
   fixture.attachMastermind();
-  await expect(page.getByText("Watching", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open terminal", exact: true })).toBeVisible();
+  expect(fixture.attachments).toEqual([]);
   expect(fixture.sessions.dev).toEqual([previous]);
   expect(fixture.sessions.local).toHaveLength(1);
 });
@@ -292,7 +298,7 @@ test("resuming after an uncertain write requires a fresh read and explicit ackno
   let requestedId = "";
   const failedWrite = async (route: import("@playwright/test").Route) => { writes++; requestedId = route.request().postDataJSON().id; await route.abort("failed"); };
   await page.route("**/api/mastermind/workspace/tasks", failedWrite);
-  await workspace(page);
+  await workspace(page, "tasks");
   await page.getByRole("button", { name: "New task", exact: true }).click();
   await page.getByLabel("Task title", { exact: true }).fill("Unconfirmed draft");
   const failedRead = async (route: import("@playwright/test").Route) => route.fulfill({ status: 503, json: { error: "Workspace offline" } });

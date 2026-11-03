@@ -154,7 +154,11 @@ test("real binary: Mastermind reuses its exact persistent agent and preserves pr
     expect(captured).toMatchObject({ sessionId: first.id, provider: "claude", mode: "manual", cwd: projectDir, tty: true, relayBin: executable, relaySocket: join(runtimeDir, "run", "daemon.sock") });
     expect(captured.fleet.hosts).toHaveLength(1);
     expect(captured.fleet.hosts[0]).toMatchObject({ id: "local", name: "This computer", target: "local" });
+    await expect(page.locator(".mastermind-terminal")).toHaveCount(0);
+    await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Pages", exact: true }).click();
     await expect(page.frameLocator(`iframe[title="Fixture plan ${first.id.slice(0, 8)} canvas"]`).getByRole("heading", { name: "Fixture coordinator plan", exact: true })).toBeVisible();
+    await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Tasks", exact: true }).click();
+    await expect(page.locator("iframe,.mastermind-terminal")).toHaveCount(0);
     await expect(page.getByLabel(`Status for Review fixture plan ${first.id.slice(0, 8)}`, { exact: true })).toHaveValue("todo");
     const args = captured.args as string[];
     expect(args.slice(-2)[0]).toBe("--append-system-prompt");
@@ -164,16 +168,23 @@ test("real binary: Mastermind reuses its exact persistent agent and preserves pr
     expect(args.at(-1)).toContain("If no task has been supplied, wait for the user.");
     expect(args.filter((arg) => arg.includes("You are Relay Mastermind"))).toHaveLength(1);
     expect(args.some((arg) => arg.includes("dangerously") || arg.includes("Relay session mode: Auto"))).toBeFalsy();
+    await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Terminal", exact: true }).click();
     await expect(card.getByRole("button", { name: "Take control", exact: true })).toBeVisible();
     await card.getByRole("button", { name: "Take control", exact: true }).click();
     await expect(card.getByText("Controlling", { exact: true })).toBeVisible();
     await page.keyboard.type("only-the-user-starts-work");
     await page.keyboard.press("Enter");
     await expect.poll(async () => (await page.request.get(`${launch.origin}/api/hosts/local/runtime/sessions/${first.id}/history`)).text()).toContain("RELAY_MASTERMIND_INPUT:only-the-user-starts-work");
+    await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Overview", exact: true }).click();
+    await expect(page.locator(".xterm")).toHaveCount(0);
+    expect((await sessions()).find((item: { id: string }) => item.id === first.id)).toMatchObject({ id: first.id, createdAt: first.createdAt, status: "running" });
+    await card.getByRole("button", { name: "Open terminal", exact: true }).click();
+    await expect(card.getByText("Watching", { exact: true })).toBeVisible();
+    await expect(page.locator(".xterm-rows")).toContainText("RELAY_MASTERMIND_INPUT:only-the-user-starts-work");
     await page.reload();
     await expect(card.getByRole("button", { name: "Take control", exact: true })).toBeVisible();
     const secondViewer = await context.newPage();
-    await secondViewer.goto(`${launch.origin}/#mastermind`);
+    await secondViewer.goto(`${launch.origin}/#mastermind/terminal`);
     await expect(secondViewer.getByRole("region", { name: "Mastermind", exact: true })).toBeVisible();
     for (let count = 0; count < 3; count++) expect((await state()).session).toMatchObject({ id: first.id, createdAt: first.createdAt, mastermindId: first.mastermindId });
     expect(await sessions()).toHaveLength(1);
@@ -188,6 +199,8 @@ test("real binary: Mastermind reuses its exact persistent agent and preserves pr
     controller = launch.child;
     await page.goto(launch.url);
     await page.getByRole("button", { name: "Open Mastermind", exact: true }).click();
+    await expect(page.locator(".mastermind-terminal")).toHaveCount(0);
+    await card.getByRole("button", { name: "Open terminal", exact: true }).click();
     await expect(card.getByRole("button", { name: "Take control", exact: true })).toBeVisible();
     await expect.poll(async () => (await state()).session?.id).toBe(first.id);
     expect((await state()).session).toMatchObject({ id: first.id, createdAt: first.createdAt, mastermindId: first.mastermindId, status: "running" });
@@ -334,6 +347,7 @@ test("real previous runtime: all Mastermind provider modes preserve existing ter
       expect(capture.args.at(-1)).toContain("Use the Relay executable supplied in RELAY_BIN.");
       expect(capture.args.at(-1)).toContain("If no task has been supplied, wait for the user.");
       expect(capture.args.at(-1).includes("Relay session mode: Auto")).toBe(selection.mode === "auto");
+      await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Terminal", exact: true }).click();
       await expect(card.getByRole("region", { name: "Mastermind terminal", exact: true })).toBeVisible();
       await expect(card.getByText("Watching", { exact: true })).toBeVisible();
       await expect(card.getByLabel(selection.mode === "auto" ? "Launch mode: Auto · full access" : "Launch mode: Manual", { exact: true })).toBeVisible();
@@ -354,7 +368,7 @@ test("real previous runtime: all Mastermind provider modes preserve existing ter
     // A second view and a new controller must reconcile the exact shell and
     // receipt. Neither is authorization to resend the exec command.
     const secondViewer = await context.newPage();
-    await secondViewer.goto(`${launch.origin}/#mastermind`);
+    await secondViewer.goto(`${launch.origin}/#mastermind/terminal`);
     await expect(secondViewer.getByRole("region", { name: "Mastermind terminal", exact: true })).toBeVisible();
     await secondViewer.close();
     await stop(controller);
@@ -362,6 +376,7 @@ test("real previous runtime: all Mastermind provider modes preserve existing ter
     controller = launch.child;
     await page.goto(launch.url);
     await page.getByRole("button", { name: "Open Mastermind", exact: true }).click();
+    await card.getByRole("button", { name: "Open terminal", exact: true }).click();
     await expect(card.getByText("Watching", { exact: true })).toBeVisible();
     expect((await state()).session).toMatchObject({ ...identities.at(-1), harness: "shell", status: "running" });
     expect(await readFile(join(runtimeDir, "agent-launches"), "utf8")).toBe(launchesBeforeRestart);

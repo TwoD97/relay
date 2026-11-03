@@ -271,6 +271,13 @@ class WebDriver:
         element = self.find("css selector", selector)
         self.call("POST", f"/element/{element}/click", {})
 
+    def select_mastermind_view(self, section):
+        require(section in ("Overview", "Pages", "Tasks", "Terminal"), "Unknown test-owned Mastermind section")
+        wait_for(lambda: self.script('return [...document.querySelectorAll(".workspace-view-navigation button > span")].some(label=>label.textContent===arguments[0]);', section), "Mastermind section navigation is ready")
+        element = self.find("xpath", f"//nav[@aria-label='Mastermind views']/button[span[normalize-space(.)='{section}']]")
+        self.call("POST", f"/element/{element}/click", {})
+        wait_for(lambda: self.script('return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];', section), "Mastermind " + section + " view")
+
     def fill(self, selector, text, using="css selector"):
         element = self.find(using, selector)
         self.call("POST", f"/element/{element}/clear", {})
@@ -602,7 +609,10 @@ def check_local_mastermind(browser, second, state, artifacts):
     require(status == 202, 'Could not configure the disposable local coordinator')
     live = wait_for(lambda: (lambda record: record if record.get('status') == 'running' else None)(second.json('/api/mastermind')), 'local Mastermind attaches', 30)
     browser.call('POST', '/url', {'url':second.origin+'/#mastermind'})
-    wait_for(lambda: browser.terminal_contains('RELAY_LOCAL_COORDINATOR_READY'), 'embedded native Mastermind renderer')
+    wait_for(lambda: browser.script('return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent==="Overview";'), 'local Mastermind overview')
+    require(browser.script('return !document.querySelector(".terminal-shell");'), 'Mastermind overview unexpectedly mounted a terminal')
+    browser.select_mastermind_view('Terminal')
+    wait_for(lambda: browser.terminal_contains('RELAY_LOCAL_COORDINATOR_READY'), 'dedicated native Mastermind renderer')
     browser.claim_terminal()
     nested = artifacts / 'mastermind'
     nested.mkdir(exist_ok=True)
@@ -614,7 +624,11 @@ def check_local_mastermind(browser, second, state, artifacts):
     workspace = wait_for(lambda: (lambda record: record if record.get('revision') == 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
     browser.terminal_command('"$RELAY_BIN" workspace tasks create --revision 1 --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
     wait_for(lambda: second.json('/api/mastermind/workspace').get('revision') == 2, 'agent CLI publishes task')
-    wait_for(lambda: browser.script("return [...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='Native plan') && !!document.querySelector('article[aria-label=\"Verify native terminal\"]');"), 'native workspace refreshes pages and tasks')
+    browser.terminal_command("printf 'RELAY_%s\\n' 'MASTERMIND_VIEW_RETURN'")
+    wait_for(lambda: browser.terminal_contains('RELAY_MASTERMIND_VIEW_RETURN'), 'coordinator marker before changing views')
+    browser.select_mastermind_view('Pages')
+    require(browser.script('return !document.querySelector(".terminal-shell");'), 'Pages view unexpectedly retained an interactive terminal')
+    wait_for(lambda: browser.script("return [...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='Native plan');"), 'native pages view lists the agent-authored page')
     sandbox = wait_for(lambda: browser.script('const frame=document.querySelector("iframe");return frame && {sandbox:frame.getAttribute("sandbox"),srcdoc:frame.getAttribute("srcdoc")};'), 'native HTML canvas loads')
     require(sandbox and sandbox['sandbox'] == '' and 'Native canvas proof' in sandbox['srcdoc'], 'HTML canvas is missing or unsandboxed')
     frame = browser.call('POST', '/element', {'using':'css selector', 'value':'iframe'})
@@ -623,13 +637,22 @@ def check_local_mastermind(browser, second, state, artifacts):
         wait_for(lambda: browser.script("const h=document.querySelector('h1');return h?.textContent==='Native canvas proof'&&h.getBoundingClientRect().height>0&&document.readyState==='complete';"), 'native sandboxed canvas actually renders its document')
     finally:
         browser.call('POST', '/frame', {'id':None})
+    browser.screenshot(artifacts / 'native-mastermind-pages.png')
+    browser.select_mastermind_view('Tasks')
+    wait_for(lambda: browser.script('return document.querySelector(\'article[aria-label="Verify native terminal"] select\')?.value==="done";'), 'native tasks view shows the agent-authored completed task')
+    require(browser.script('return !document.querySelector(".terminal-shell,.canvas-document iframe");'), 'Tasks view unexpectedly retained another workspace view')
+    browser.screenshot(artifacts / 'native-mastermind-tasks.png')
+    browser.select_mastermind_view('Terminal')
+    wait_for(lambda: browser.terminal_contains('RELAY_MASTERMIND_VIEW_RETURN'), 'returning from pages and tasks replays the original terminal screen')
+    after = second.json('/api/mastermind')
+    require(after['session']['id'] == live['session']['id'] and after['session']['createdAt'] == live['session']['createdAt'], 'Changing views replaced the local coordinator')
     require(len(second.json('/api/hosts/local/runtime/sessions')) == 2, 'Mastermind created duplicate sessions')
     browser.screenshot(artifacts / 'native-mastermind-workspace.png')
     status, _ = second.request('/api/mastermind/disable', 'POST', {'revision':live['revision']})
     require(status == 202, 'Could not pause disposable Mastermind')
     status, _ = second.request('/api/hosts/local/runtime/sessions/'+live['session']['id'], 'DELETE')
     require(status == 204, 'Could not remove disposable coordinator')
-    print('PASS: native embedded Mastermind size, local persistent coordinator, private agent CLI, HTML canvas and task dashboard', flush=True)
+    print('PASS: native Mastermind terminal geometry, separate pages/tasks views, private agent CLI and persistent coordinator', flush=True)
 
 
 def run(args):
@@ -656,11 +679,19 @@ def run(args):
         fixture = fixture_bin / 'codex'
         fixture.write_text('#!/bin/sh\ncase "$1" in\n--version) echo fixture-1; exit 0;;\n--help) echo "[PROMPT] --dangerously-bypass-approvals-and-sandbox"; exit 0;;\nlogin) exit 0;;\nesac\necho RELAY_LOCAL_COORDINATOR_READY\nexec /bin/sh -i\n')
         fixture.chmod(0o700)
+        # Harness discovery checks both providers. Shadow Claude as well so
+        # background status reads never run an installed personal CLI.
+        claude_fixture = fixture_bin / 'claude'
+        claude_fixture.write_text('#!/bin/sh\ncase "$1" in\n--version) echo fixture-1; exit 0;;\n--help) echo "--append-system-prompt --dangerously-skip-permissions"; exit 0;;\nauth) [ "$2" = status ] && exit 1;;\nesac\nexit 2\n')
+        claude_fixture.chmod(0o700)
+        for config in (root / "claude-config", root / "codex-config"):
+            config.mkdir(mode=0o700)
         control_socket = state / "run" / "controller.sock"
         environment = dict(os.environ,
             RELAY_DESKTOP_STATE_DIR=str(state), RELAY_DESKTOP_RUNTIME_DIR=str(runtime),
             RELAY_DESKTOP_LOCAL="1", XDG_DATA_HOME=str(root / "data"),
             XDG_CONFIG_HOME=str(root / "config"), XDG_CACHE_HOME=str(root / "cache"),
+            CLAUDE_CONFIG_DIR=str(root / "claude-config"), CODEX_HOME=str(root / "codex-config"),
             GDK_BACKEND="x11", SHELL="/bin/sh")
         for key in ("ENV", "BASH_ENV", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"):
             environment.pop(key, None)
@@ -708,6 +739,8 @@ def run(args):
                 require(launch["pid"] == identity[0], "Desktop helper did not reuse the native controller")
                 second = BrowserClient(launch)
                 require(second.json("/api/state")["hosts"][0]["id"] == "local", "Missing shared local host")
+                harnesses = second.json("/api/hosts/local/runtime/harnesses")
+                require({item['id']: item.get('path') for item in harnesses} == {'claude': str(claude_fixture), 'codex': str(fixture)}, "Native fixture resolved a provider outside its disposable directory")
                 print("PASS: native WebKit fleet and independent browser authentication", flush=True)
 
                 browser.click_css(".host-select")

@@ -205,7 +205,8 @@ export interface FleetState {
   reconnectError?: string;
 }
 
-export type Selection = { host: string; session?: string; view?: never; expanded?: boolean; page?: never }
-  | { view: "activity"; host?: never; session?: never; expanded?: never; page?: never }
-  | { view: "mastermind"; host?: never; session?: never; expanded?: boolean; page?: string }
+export type MastermindSection = "overview" | "pages" | "tasks" | "terminal";
+export type Selection = { host: string; session?: string; view?: never; expanded?: boolean; page?: never; section?: never }
+  | { view: "activity"; host?: never; session?: never; expanded?: never; page?: never; section?: never }
+  | { view: "mastermind"; host?: never; session?: never; expanded?: boolean; page?: string; section?: MastermindSection }
   | null;

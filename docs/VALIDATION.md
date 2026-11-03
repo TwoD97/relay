@@ -525,3 +525,34 @@ The new service-side diagnostic takes effect after that service next starts,
 such as after a Windows restart once local sessions have finished. Reopening
 the desktop alone does not replace it. A currently verified login needs no
 service restart, and remote daemons are not affected by this update.
+
+## Mastermind views — 2026-11-03
+
+Desktop version: `0.3.2`.
+
+Mastermind now separates Overview, Pages, Tasks, and Terminal. Overview derives
+progress and next steps from saved tasks; Pages gives the selected sandboxed
+document its own canvas; Tasks provides status groups, search, and expandable
+details. Only Terminal attaches a terminal viewer. Changing views does not
+start, stop, or send input to the coordinator. Existing page and full-window
+links remain compatible with the new routes.
+
+- All 106 focused desktop/phone checks passed, including routing and history,
+  page sanitization, revision conflicts, unknown write outcomes, setup/login,
+  image targets, renaming, terminal sizing, and view changes with a controlled
+  session. TypeScript checking passed.
+- A delayed page deletion cannot navigate away from a newer view or close a
+  replacement dialog. Deleting a task uses the editor's captured revision;
+  agent edits require reopening the task before deletion. Both regressions
+  passed on desktop and phone, alongside the existing workspace/route checks.
+- All four views were checked in light and dark themes at desktop and phone
+  sizes. Terminal toolbar controls remain inside the viewport and wrap on
+  narrow windows. Canvas and terminal views retain usable height.
+- Native Windows and Linux smoke scripts now visit each view explicitly. They
+  assert actual sandboxed HTML rendering, task status, terminal replay, and
+  unchanged coordinator identity after returning to Terminal. The Linux fixture
+  shadows both supported providers and isolates their configuration directories.
+
+The view split changes no workspace storage, provider permissions, or runtime
+protocol. Compatible running local and remote services remain attached; this
+interface update does not require restarting their agent sessions.

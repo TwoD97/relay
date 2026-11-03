@@ -36,7 +36,7 @@ Close the existing Relay window before installing or opening a different build;
 otherwise, single-instance activation focuses the already running copy. Closing
 the window leaves its controller and remote sessions running. Install over the
 existing installation, then open Relay from the Start menu. The desktop package
-version is `0.3.1`; reinstalling that same version may offer **Add/Reinstall**.
+version is `0.3.2`; reinstalling that same version may offer **Add/Reinstall**.
 The bundled runtime has its own build version and the launcher checks it before
 reusing or replacing the local controller.
 
