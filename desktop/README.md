@@ -36,9 +36,14 @@ Close the existing Relay window before installing or opening a different build;
 otherwise, single-instance activation focuses the already running copy. Closing
 the window leaves its controller and remote sessions running. Install over the
 existing installation, then open Relay from the Start menu. The desktop package
-version is `0.3.2`; reinstalling that same version may offer **Add/Reinstall**.
+version is `0.3.3`; reinstalling that same version may offer **Add/Reinstall**.
 The bundled runtime has its own build version and the launcher checks it before
 reusing or replacing the local controller.
+
+The **Needs attention** heading in the sidebar can collapse its notification
+list. The count stays visible, new notifications respect the collapsed state,
+and the desktop remembers the choice after reopening. Scrollbars follow the
+app's light or dark appearance, including terminals and Mastermind pages.
 
 Installed and portable copies use the same Windows account data:
 
@@ -48,6 +53,7 @@ Installed and portable copies use the same Windows account data:
 | Mastermind pages/tasks | `%LOCALAPPDATA%\RelayData\relay-client\workspace.json` |
 | Local Mastermind service and private harness releases | `%LOCALAPPDATA%\RelayData\relay-client\local-agent` |
 | Appearance preference | `%APPDATA%\dev.relay.desktop\appearance.json` |
+| Sidebar attention preference | `%APPDATA%\dev.relay.desktop\sidebar.json` |
 | Embedded WebView2 profile | `%LOCALAPPDATA%\dev.relay.desktop` |
 | SSH configuration, keys, and trusted hosts | The user's `.ssh` directory, or configured SSH paths |
 

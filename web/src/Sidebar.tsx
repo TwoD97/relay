@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { ArrowUpRight, Bell, BrainCircuit, ChevronDown, ChevronRight, Folder, Layers3, Plus, Search, Server, Terminal, X } from "lucide-react";
 import type { FleetState, Host, Selection, Session } from "./types";
 import { approvalActionable, pendingApprovals } from "./Approvals";
 import { maintenanceNeedsAttention } from "./MaintenanceJobs";
+import { useSidebarAttention } from "./sidebarAttention";
 
 export function HostStatus({ host, compact = false }: { host: Host; compact?: boolean }) {
   return <span className={`status-pill status-${host.status}`}><span className="status-dot" />{compact ? host.status === "online" ? "Online" : host.status === "error" ? "Needs attention" : host.status === "disconnected" ? "Offline" : "Connecting" : host.status[0].toUpperCase() + host.status.slice(1)}</span>;
@@ -23,6 +24,8 @@ function readCollapsed(): Record<string, boolean> {
 export function Sidebar({ state, selected, mobileOpen, onClose, onSelect, onAdd }: { state: FleetState; selected: Selection; mobileOpen: boolean; onClose: () => void; onSelect: (selection: Selection) => void; onAdd: () => void }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const attentionPreference = useSidebarAttention();
+  const attentionListId = useId();
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 800px)").matches);
   useEffect(() => { const query = window.matchMedia("(max-width: 800px)"); const update = () => setMobile(query.matches); query.addEventListener("change", update); return () => query.removeEventListener("change", update); }, []);
   const toggle = (key: string) => setCollapsed((old) => { const next = { ...old, [key]: !old[key] }; try { localStorage.setItem("relay-collapsed", JSON.stringify(next)); } catch { /* The tree remains usable without storage. */ } return next; });
@@ -51,11 +54,11 @@ export function Sidebar({ state, selected, mobileOpen, onClose, onSelect, onAdd 
         <button className={`fleet-nav ${selected?.view === "mastermind" ? "active" : ""}`} onClick={() => select({ view: "mastermind" })}><BrainCircuit size={17} /><span>Mastermind</span></button>
         <button className={`fleet-nav ${selected?.view === "activity" ? "active" : ""}`} onClick={() => select({ view: "activity" })}><Bell size={17} /><span>Activity</span>{approvals > 0 && <span className="nav-count" aria-label={`${approvals} pending approvals`}>{approvals}</span>}</button>
         <label className="sidebar-search"><Search size={15} /><input aria-label="Filter machines and sessions" placeholder="Find a machine or session…" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button aria-label="Clear filter" onClick={() => setQuery("")}><X size={13} /></button>}</label>
-        <section className={`attention-pins ${attentionCount + approvals ? "" : "attention-quiet"}`} aria-label="Needs attention"><div className="attention-label"><Bell size={12} /><span>NEEDS ATTENTION</span><b>{attentionCount + approvals}</b></div><div className="attention-list" tabIndex={0} aria-label="Attention items">
+        <section className={`attention-pins ${attentionCount + approvals ? "" : "attention-quiet"} ${attentionPreference.collapsed ? "attention-collapsed" : ""}`} aria-label="Needs attention"><button type="button" className="attention-label" aria-label={`${attentionPreference.collapsed ? "Expand" : "Collapse"} needs attention`} aria-expanded={!attentionPreference.collapsed} aria-controls={attentionListId} aria-describedby={`${attentionListId}-count`} onClick={attentionPreference.toggle}><Bell size={12} /><span>NEEDS ATTENTION</span><b id={`${attentionListId}-count`} aria-label={`${attentionCount + approvals} items need attention`}>{attentionCount + approvals}</b>{attentionPreference.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button><div className="attention-list" id={attentionListId} hidden={attentionPreference.collapsed} tabIndex={0} aria-label="Attention items">
           {approvals > 0 && <button className="attention-pin" onClick={() => select({ view: "activity" })}><strong>{approvals} permission {approvals === 1 ? "request" : "requests"}</strong><span>Review requests in Activity</span><ArrowUpRight size={13} /></button>}
           {hostAttention.map((host) => <button key={host.id} className="attention-pin" onClick={() => select({ host: host.id })}><strong>{host.name}</strong><span>{host.status === "error" ? "Connection needs attention" : host.runtimeOperation?.status === "error" ? "Runtime maintenance failed" : maintenanceAttention.has(host.id) ? "Agent maintenance needs attention" : "Agent coordination setup"}</span><ArrowUpRight size={13} /></button>)}{attention.map(({ host, session }) => <button key={`${host.id}/${session.id}`} className="attention-pin" onClick={() => select({ host: host.id, session: session.id })}><strong>{session.title}</strong><span>{host.name} · {session.attention?.kind === "permission" ? "Permission event" : "Notification"}</span><ArrowUpRight size={13} /></button>)}
           {attentionCount + approvals === 0 && <p className="attention-empty">No reported requests or notifications.</p>}
-        </div></section>
+        </div>{attentionPreference.error && <p className="attention-save-error" role="status">{attentionPreference.error}</p>}</section>
         <div className="sidebar-section-label"><span>MACHINES</span><button aria-label="Add machine" title="Add machine" onClick={onAdd}><Plus size={15} /></button></div>
         <nav className="host-tree" aria-label="Machines and workspaces">{entries.map(({ host, groups }) => <div className="tree-host" key={host.id}>
           <div className={`tree-host-row ${selected?.host === host.id && !selected.session ? "selected" : ""}`}>

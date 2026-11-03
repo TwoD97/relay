@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import type { ResolvedAppearance } from "./appearance";
+import scrollbars from "./scrollbars.css?raw";
 
 const policy = "default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const tags = ["div", "span", "p", "br", "hr", "section", "article", "header", "footer", "main", "aside", "nav", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd", "blockquote", "pre", "code", "kbd", "samp", "strong", "b", "em", "i", "small", "sub", "sup", "mark", "s", "del", "ins", "time", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col", "figure", "figcaption", "details", "summary", "img", "style"];
@@ -24,5 +25,5 @@ export function mastermindHTML(html: string, appearance: ResolvedAppearance) {
     ADD_DATA_URI_TAGS: [],
   });
   const dark = appearance === "dark";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:${appearance};font:14px/1.6 system-ui,sans-serif;color:${dark ? "#e6eadd" : "#263328"};background:${dark ? "#141a16" : "#fbfcf9"}}body{margin:24px;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid ${dark ? "#394438" : "#d8dfd0"}}pre{white-space:pre-wrap}*{box-sizing:border-box}</style></head><body>${clean}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:${appearance};font:14px/1.6 system-ui,sans-serif;color:${dark ? "#e6eadd" : "#263328"};background:${dark ? "#141a16" : "#fbfcf9"};--scrollbar:${dark ? "#63745a" : "#78896b"};--scrollbar-hover:${dark ? "#7f916f" : "#657a55"};--scrollbar-active:${dark ? "#a0b887" : "#526945"};--scrollbar-track:transparent}body{margin:24px;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid ${dark ? "#394438" : "#d8dfd0"}}pre{white-space:pre-wrap}*{box-sizing:border-box}${scrollbars}</style></head><body>${clean}</body></html>`;
 }

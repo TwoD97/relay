@@ -311,7 +311,7 @@ test("attention uses runtime events and remains pinned when the tree is filtered
   await page.getByRole("textbox", { name: "Filter machines and sessions" }).fill("not-a-project");
   const pinned = page.getByRole("region", { name: "Needs attention" });
   await expect(pinned).toContainText("Build the dashboard");
-  await pinned.getByRole("button").click();
+  await pinned.locator(".attention-list").getByRole("button").click();
   await expect(page.getByText("The agent reported a permission request.", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Mark reviewed" }).click();

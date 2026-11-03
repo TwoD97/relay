@@ -5,6 +5,7 @@ mod frame;
 mod launch;
 mod platform;
 mod session_window;
+mod ui_preferences;
 
 use launch::{is_shell_page, same_origin, Launcher};
 use std::sync::{
@@ -31,6 +32,7 @@ struct DesktopState {
     appearance: Arc<Mutex<appearance::Store>>,
     appearance_actions: Arc<Mutex<()>>,
     session_route: Arc<Mutex<Option<String>>>,
+    sidebar: Arc<Mutex<ui_preferences::Store>>,
 }
 
 fn main() {
@@ -72,14 +74,16 @@ fn run(route: Option<String>) -> tauri::Result<()> {
         }));
     }
     builder
-        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance, session_window::open_session_window])
+        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance, session_window::open_session_window, ui_preferences::sidebar_attention])
         .manage(state)
         .setup(move |app| {
             let owned_profile = session_window::Profile::new(app.handle(), detached)?;
             let profile_path = owned_profile.0.clone();
             *setup_profile.lock().expect("desktop profile") = owned_profile;
             appearance::initialize(app.handle());
+            ui_preferences::initialize(app.handle());
             let initial_appearance = appearance::initialization_script(app.handle());
+            let initial_sidebar = ui_preferences::initialization_script(app.handle());
             let initial_background = appearance::initial_background(app.handle());
             let state = app.state::<DesktopState>().inner().clone();
             let origin = state.origin.clone();
@@ -94,6 +98,7 @@ fn run(route: Option<String>) -> tauri::Result<()> {
                 .visible(false)
                 .background_color(initial_background)
                 .initialization_script(&initial_appearance)
+                .initialization_script(&initial_sidebar)
                 // Only this webview can reach the authenticated controller,
                 // with navigation constrained below. Enable its standard web
                 // clipboard API for explicit copy/paste gestures; no native

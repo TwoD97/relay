@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Relay",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "identifier": "dev.relay.desktop",
   "build": {
     "frontendDist": "assets"
@@ -66,6 +66,22 @@
           ],
           "permissions": [
             "allow-open-session-window"
+          ]
+        },
+        {
+          "identifier": "desktop-sidebar-preference",
+          "description": "Read or save one sidebar preference; native code checks the exact current controller origin.",
+          "local": false,
+          "remote": {
+            "urls": [
+              "http://127.0.0.1:*"
+            ]
+          },
+          "webviews": [
+            "main"
+          ],
+          "permissions": [
+            "allow-sidebar-attention"
           ]
         }
       ],

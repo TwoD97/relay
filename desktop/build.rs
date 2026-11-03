@@ -4,6 +4,7 @@ fn main() {
             "frame_action",
             "appearance",
             "open_session_window",
+            "sidebar_attention",
         ]),
     ))
     .expect("build desktop assets and restricted frame permissions");

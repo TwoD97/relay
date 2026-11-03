@@ -556,3 +556,32 @@ links remain compatible with the new routes.
 The view split changes no workspace storage, provider permissions, or runtime
 protocol. Compatible running local and remote services remain attached; this
 interface update does not require restarting their agent sessions.
+
+## Sidebar attention and scrollbars — 2026-11-03
+
+Desktop version: `0.3.3`.
+
+Needs attention has a keyboard-accessible disclosure button. Collapsing the
+list returns its reserved space to the machine tree; its count remains visible
+and incoming notifications do not expand it. The expanded list retains a fixed
+height so incoming requests do not move the machine tree. A separate native
+sidebar preference survives desktop and controller restarts, independently of
+the controller's loopback port. Storage failures leave the toggle usable and
+show that the preference could not be saved.
+
+Scrollbar colors follow the app appearance in the sidebar, dialogs, task board,
+sandboxed pages, and terminals. Native scroll handling, platform scrollbar
+widths, and terminal dimensions remain unchanged. High contrast mode uses system
+colors. Canvas documents retain their existing sandbox and content policy.
+
+Regression coverage includes notification arrivals while collapsed, keyboard
+navigation, corrupt or unavailable storage, delayed native writes, light/dark
+scrolling, terminal scrollback, canvas isolation, and terminal grid geometry.
+Native checks use disposable desktop state and deterministic provider fixtures
+to verify persistence across a changed controller port and unchanged session
+identity. They do not install into the personal account or modify its sessions.
+
+All 94 focused desktop/phone checks passed, alongside TypeScript checking and
+native Rust tests (23 on Linux, 21 on Windows) with strict Clippy checks. The
+scrollback test drags the real thumb through its range; it does not assume that
+xterm maps one large mouse-wheel event to a jump through the entire buffer.

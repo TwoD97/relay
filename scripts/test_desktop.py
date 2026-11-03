@@ -37,6 +37,7 @@ import uuid
 
 
 ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
+SCROLLBAR_COLORS = {"dark": "rgb(99,116,90)", "light": "rgb(120,137,107)"}
 
 
 def require(condition, message):
@@ -258,6 +259,59 @@ class WebDriver:
             require(reconnected, "Trusted chrome could not reconnect after bundled appearance checks")
         wait_for(lambda: self.body_contains("Fleet overview"), "fleet restored after bundled appearance checks")
         print("PASS: native Light/Dark/System IPC, chrome/menu parity and frame permission isolation", flush=True)
+
+    def sidebar_collapsed(self):
+        return self.script("const button=document.querySelector('.attention-label'),list=document.querySelector('.attention-list');return !!button&&button.getAttribute('aria-expanded')==='false'&&list?.hidden&&getComputedStyle(list).display==='none';")
+
+    def check_sidebar_attention(self, state, artifacts):
+        button = '.attention-label'
+        require(self.script("const b=document.querySelector('.attention-label');return b?.getAttribute('aria-expanded')==='true'&&document.getElementById(b.getAttribute('aria-controls'))===document.querySelector('.attention-list');"), "Native attention disclosure did not default to accessible expanded state")
+        expanded = self.script("return document.querySelector('.attention-pins').getBoundingClientRect().height;")
+        require(144 <= expanded <= 146, "Expanded attention no longer reserves a stable notification slot")
+        self.click_css(button)
+        wait_for(self.sidebar_collapsed, "native attention collapse")
+        collapsed = self.script("return document.querySelector('.attention-pins').getBoundingClientRect().height;")
+        require(30 <= collapsed <= 35 and expanded - collapsed >= 100, "Collapsed attention did not return space to the machine tree")
+        preference_file = state / "desktop" / "sidebar.json"
+        def saved(collapsed=True):
+            return preference_file.exists() and json.loads(preference_file.read_text()) == {"format": 1, "collapsed": collapsed}
+        wait_for(saved, "native sidebar preference durably saved")
+        self.click_css(button)
+        wait_for(lambda: self.script("return document.querySelector('.attention-label')?.getAttribute('aria-expanded')==='true'&&!document.querySelector('.attention-list')?.hidden;"), "native attention expands again")
+        wait_for(lambda: saved(False), "expanded sidebar preference saved before next toggle")
+        require(self.script("return document.querySelector('.attention-pins').getBoundingClientRect().height;") == expanded, "Attention expansion changed its reserved height")
+        self.click_css(button)
+        wait_for(self.sidebar_collapsed, "native attention collapses before relaunch")
+        wait_for(saved, "latest native sidebar preference saved")
+        rejected = self.async_script("const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('sidebar_attention',{collapsed:'yes'}).then(()=>done(false),()=>done(true));")
+        require(rejected is True and saved(), "Malformed native preference changed durable sidebar state")
+        self.screenshot(artifacts / "native-attention-collapsed.png")
+        print("PASS: native attention disclosure, reclaimed space, durable preference and malformed IPC rejection", flush=True)
+
+    def check_scrollbar_colors(self, artifacts, terminal=False):
+        dimensions = self.script("const t=document.querySelector('.terminal-shell');return t?[t.dataset.terminalCols,t.dataset.terminalRows]:null;")
+        records = []
+        for theme in ("dark", "light"):
+            self.appearance(theme)
+            wait_for(lambda: self.script("return document.documentElement.dataset.theme;") == theme, "native scrollbar appearance")
+            record = self.script("""
+                const selectors=['html','.sidebar-main','.attention-list','.page-scroll','.terminal-canvas','.xterm-viewport'];
+                const owners=selectors.flatMap(selector=>{const node=document.querySelector(selector);return node?[{selector,color:getComputedStyle(node).scrollbarColor}]:[];});
+                const slider=document.querySelector('.terminal-canvas .xterm-scrollable-element > .scrollbar > .slider');
+                return {owners,slider:slider?getComputedStyle(slider).backgroundColor:null};
+            """)
+            expected = SCROLLBAR_COLORS[theme]
+            require(len(record["owners"]) >= 3, "Native scrollbar check missed the sidebar")
+            for owner in record["owners"]:
+                require(re.sub(r"\s+", "", owner["color"]) == expected + "rgba(0,0,0,0)", "Native scrollbar palette mismatch: " + owner["selector"])
+            if terminal:
+                require(record["slider"] and re.sub(r"\s+", "", record["slider"]) == expected, "xterm custom scrollbar missed the native palette")
+            records.append({"theme": theme, **record})
+            self.screenshot(artifacts / ("native-scrollbars-" + ("terminal-" if terminal else "") + theme + ".png"))
+        if terminal:
+            require(self.script("const t=document.querySelector('.terminal-shell');return [t.dataset.terminalCols,t.dataset.terminalRows];") == dimensions, "Color-only scrollbar changes resized the terminal")
+        (artifacts / ("native-scrollbars-terminal.json" if terminal else "native-scrollbars.json")).write_text(json.dumps(records, indent=2) + "\n")
+        print("PASS: native light/dark scrollbar colors" + (" including xterm with unchanged terminal dimensions" if terminal else " across application panes"), flush=True)
 
     def find(self, using, value):
         return self.call("POST", "/element", {"using": using, "value": value})[ELEMENT]
@@ -511,9 +565,12 @@ class BrowserClient:
         return body.decode(errors="replace")
 
 
-def launch_handshake(binary, bundle, state, runtime, environment):
-    result = subprocess.run([str(binary), "desktop", "--state-dir", str(state),
-                             "--runtime-dir", str(runtime), "--binaries", str(bundle)],
+def launch_handshake(binary, bundle, state, runtime, environment, listen=None):
+    command = [str(binary), "desktop", "--state-dir", str(state),
+               "--runtime-dir", str(runtime), "--binaries", str(bundle)]
+    if listen is not None:
+        command += ["--listen", listen]
+    result = subprocess.run(command,
                             env=environment, capture_output=True, timeout=30, check=False)
     require(result.returncode == 0, "Desktop helper failed; stdout/stderr withheld to protect login secrets")
     require(len(result.stdout) <= 16384, "Oversized desktop handshake")
@@ -619,7 +676,7 @@ def check_local_mastermind(browser, second, state, artifacts):
     browser.check_terminal_geometry(nested)
     cols = browser.script('return Number(document.querySelector(".terminal-shell").dataset.terminalCols);')
     require(cols > 40, 'Wide Mastermind panel still renders a tiny terminal grid')
-    browser.terminal_command("printf '<h1>Native canvas proof</h1><p>Published from the local coordinator.</p>' > native-plan.html")
+    browser.terminal_command("printf '<h1>Native canvas proof</h1><p>Published from the local coordinator.</p><div style=\"height:1800px\"></div><p>End of native canvas proof</p>' > native-plan.html")
     browser.terminal_command('"$RELAY_BIN" workspace pages create --revision 0 --title "Native plan" --html-file native-plan.html')
     workspace = wait_for(lambda: (lambda record: record if record.get('revision') == 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
     browser.terminal_command('"$RELAY_BIN" workspace tasks create --revision 1 --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
@@ -631,12 +688,24 @@ def check_local_mastermind(browser, second, state, artifacts):
     wait_for(lambda: browser.script("return [...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='Native plan');"), 'native pages view lists the agent-authored page')
     sandbox = wait_for(lambda: browser.script('const frame=document.querySelector("iframe");return frame && {sandbox:frame.getAttribute("sandbox"),srcdoc:frame.getAttribute("srcdoc")};'), 'native HTML canvas loads')
     require(sandbox and sandbox['sandbox'] == '' and 'Native canvas proof' in sandbox['srcdoc'], 'HTML canvas is missing or unsandboxed')
-    frame = browser.call('POST', '/element', {'using':'css selector', 'value':'iframe'})
-    try:
-        browser.call('POST', '/frame', {'id':frame})
-        wait_for(lambda: browser.script("const h=document.querySelector('h1');return h?.textContent==='Native canvas proof'&&h.getBoundingClientRect().height>0&&document.readyState==='complete';"), 'native sandboxed canvas actually renders its document')
-    finally:
-        browser.call('POST', '/frame', {'id':None})
+    for theme in ('dark', 'light'):
+        browser.appearance(theme)
+        wait_for(lambda: browser.script('return document.documentElement.dataset.theme;') == theme, 'native canvas theme')
+        wait_for(lambda: browser.script('return document.querySelector("iframe")?.getAttribute("srcdoc")?.includes("color-scheme:"+arguments[0]+";");', theme), 'new canvas document adopts the current theme')
+        # The sandbox is opaque to the app. WebDriver enters the real frame;
+        # do not infer rendering or scroll behavior from its srcdoc string.
+        frame = browser.call('POST', '/element', {'using':'css selector', 'value':'iframe'})
+        try:
+            browser.call('POST', '/frame', {'id':frame})
+            wait_for(lambda: browser.script("const h=document.querySelector('h1');return h?.textContent==='Native canvas proof'&&h.getBoundingClientRect().height>0&&document.readyState==='complete';"), 'native sandboxed canvas actually renders its document')
+            wait_for(lambda: browser.script('return getComputedStyle(document.documentElement).colorScheme;') == theme, 'native canvas resolved palette')
+            color = browser.script('return getComputedStyle(document.documentElement).scrollbarColor;')
+            require(re.sub(r'\s+', '', color) == SCROLLBAR_COLORS[theme] + 'rgba(0,0,0,0)', 'Canvas scrollbar palette disagrees with Relay')
+            browser.script('window.scrollTo(0,document.documentElement.scrollHeight);')
+            wait_for(lambda: browser.script("const end=document.querySelector('body > p:last-child');return document.scrollingElement.scrollTop>0&&end?.textContent==='End of native canvas proof'&&end.getBoundingClientRect().bottom<=innerHeight+1;"), 'last canvas content reachable by native scrolling')
+            browser.script('window.scrollTo(0,0);')
+        finally:
+            browser.call('POST', '/frame', {'id':None})
     browser.screenshot(artifacts / 'native-mastermind-pages.png')
     browser.select_mastermind_view('Tasks')
     wait_for(lambda: browser.script('return document.querySelector(\'article[aria-label="Verify native terminal"] select\')?.value==="done";'), 'native tasks view shows the agent-authored completed task')
@@ -734,6 +803,8 @@ def run(args):
                 browser.check_frame()
                 browser.check_appearance(artifacts)
                 require(json.loads((state / "desktop" / "appearance.json").read_text()) == {"format": 1, "preference": "light"}, "Native preference was not durably saved")
+                browser.check_sidebar_attention(state, artifacts)
+                browser.check_scrollbar_colors(artifacts)
                 identity = controller_identity(control_socket)
                 launch = launch_handshake(binary, bundle, state, runtime, environment)
                 require(launch["pid"] == identity[0], "Desktop helper did not reuse the native controller")
@@ -760,12 +831,14 @@ def run(args):
                 sessions = second.json("/api/hosts/local/runtime/sessions")
                 require(len(sessions) == 1 and sessions[0]["title"] == "Desktop smoke" and sessions[0]["cwd"] == str(project), "Native form did not create session in the selected folder")
                 session = sessions[0]["id"]
+                session_created = sessions[0]["createdAt"]
                 input_path = f"/api/hosts/local/runtime/sessions/{session}/input"
                 require(browser.script("return !document.querySelector('.terminal-composer, textarea[aria-label=\"Message or command\"]');"), "Separate command composer still exists")
                 browser.claim_terminal()
                 denied, _ = second.request(input_path, "POST", {"data": "printf 'RELAY_DENIED_INPUT\\n'\r"})
                 require(denied == 409, "Second client bypassed native exclusive control")
                 browser.check_terminal_keys(session)
+                browser.check_scrollbar_colors(artifacts, terminal=True)
                 browser.check_terminal_geometry(artifacts)
                 browser.check_terminal_clipboard()
                 browser.check_terminal_image_clipboard(state, second, session, artifacts)
@@ -794,6 +867,7 @@ def run(args):
                 appearance = browser.appearance()
                 require(appearance == {"preference": "light", "resolved": "light"}, "Appearance did not survive native close/reopen")
                 browser.check_appearance_views(appearance)
+                require(browser.sidebar_collapsed(), "Sidebar preference did not survive native close/reopen")
                 browser.call("POST", "/url", {"url": second.origin + "/#host/local/session/" + session})
                 wait_for(lambda: browser.body_contains("Watching") and browser.body_contains("Desktop smoke"), "reopened persistent session")
                 wait_for(lambda: browser.terminal_contains("RELAY_NATIVE_INPUT_OK") and
@@ -804,6 +878,28 @@ def run(args):
                 browser.screenshot(artifacts / "native-reopened.png")
                 print("PASS: native close/reopen preserves controller, runtime, terminal and input", flush=True)
                 check_local_mastermind(browser, second, state, artifacts)
+                # A new controller origin must not lose native preferences or
+                # the live shell. Stop only the PID + creation time owned above.
+                old_origin = second.origin
+                browser.close()
+                stop_controller(identity, state)
+                identity = None
+                new_port = available_port()
+                require(new_port != urllib.parse.urlsplit(old_origin).port, "Test controller port allocation unexpectedly reused the old origin")
+                restarted = launch_handshake(binary, bundle, state, runtime, environment, f"127.0.0.1:{new_port}")
+                identity = controller_identity(control_socket)
+                require(restarted['address'] != old_origin, "Controller did not change origin for native preference test")
+                second = BrowserClient(restarted)
+                require(daemon.poll() is None and any(item['id'] == session and item['createdAt'] == session_created and item['status'] == 'running' for item in second.json('/api/hosts/local/runtime/sessions')), "Controller restart lost the live test shell")
+                browser.start(desktop)
+                wait_for(lambda: browser.body_contains('Fleet overview') and browser.body_contains('This computer'), 'native fleet at new controller origin', 60)
+                wait_for(browser.sidebar_collapsed, 'native sidebar preference survives controller port change')
+                require(browser.script("return localStorage.getItem('relay.attention-collapsed.v1');") is None, "New-origin preference was restored from browser storage instead of the native file")
+                require(browser.appearance() == {'preference': 'light', 'resolved': 'light'}, "Appearance changed during controller restart")
+                browser.screenshot(artifacts / 'native-attention-new-origin.png')
+                browser.call('POST', '/url', {'url': second.origin + '/#host/local/session/' + session})
+                wait_for(lambda: browser.terminal_contains('RELAY_REOPEN_INPUT_OK'), 'same terminal restored after controller origin change')
+                print('PASS: native sidebar preference survives close/reopen and controller origin change while the PTY remains running', flush=True)
                 status, _ = second.request(f"/api/hosts/local/runtime/sessions/{session}", "DELETE")
                 require(status == 204, "Could not remove test-owned shell session")
             except Exception:

@@ -165,7 +165,7 @@ test("native terminal window requests are scoped and a rejected request has no b
   await page.addInitScript(() => {
     const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> }; nativeRequests: unknown[]; browserRequests: unknown[] };
     target.nativeRequests = []; target.browserRequests = [];
-    target.__TAURI_INTERNALS__ = { invoke: async (command, args) => { if (command === "appearance") return { preference: "system", resolved: "light" }; target.nativeRequests.push({ command, args }); throw new Error("Native window outcome unavailable"); } };
+    target.__TAURI_INTERNALS__ = { invoke: async (command, args) => { if (command === "appearance") return { preference: "system", resolved: "light" }; if (command === "sidebar_attention") return { collapsed: false }; target.nativeRequests.push({ command, args }); throw new Error("Native window outcome unavailable"); } };
     window.open = (...args) => { target.browserRequests.push(args); return null; };
   });
   const fixture = await mockFleet(page);
@@ -196,11 +196,11 @@ test("attention arrivals keep the machine tree fixed and all notifications reach
   const tree = page.getByRole("navigation", { name: "Machines and workspaces", exact: true });
   const before = await tree.boundingBox();
   fixture.sessions.dev = Array.from({ length: 6 }, (_, index) => ({ ...work, id: `attention-${index}`, title: `Notification ${index}`, attention: { kind: "notification" as const, source: "claude-hook" as const, updatedAt: now } }));
-  await expect(page.getByRole("region", { name: "Needs attention", exact: true }).getByRole("button")).toHaveCount(6);
+  await expect(page.getByRole("region", { name: "Needs attention", exact: true }).locator(".attention-list").getByRole("button")).toHaveCount(6);
   const after = await tree.boundingBox();
   expect(after!.y).toBe(before!.y);
-  await page.getByRole("region", { name: "Needs attention", exact: true }).getByRole("button").last().scrollIntoViewIfNeeded();
-  await expect(page.getByRole("region", { name: "Needs attention", exact: true }).getByRole("button").last()).toBeVisible();
+  await page.getByRole("region", { name: "Needs attention", exact: true }).locator(".attention-list").getByRole("button").last().scrollIntoViewIfNeeded();
+  await expect(page.getByRole("region", { name: "Needs attention", exact: true }).locator(".attention-list").getByRole("button").last()).toBeVisible();
   expect(fixture.mutations).toEqual([]);
 });
 

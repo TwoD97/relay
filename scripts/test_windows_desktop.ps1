@@ -33,6 +33,8 @@ param(
     # Native coordinator/canvas/detached-view rendering with a test provider PE.
     # No SSH, physical mouse events, clipboard, or real provider account access.
     [switch]$LocalMastermindOnly,
+    # Sidebar persistence and themed scrollbars, with synthetic discovery only.
+    [switch]$SidebarOnly,
     [string]$ProviderFixture = '',
     # Enable only with a disposable account clipboard. This replaces clipboard
     # contents with fixture text; private clipboard contents are never captured.
@@ -1053,6 +1055,82 @@ function Select-AppAppearance([string]$Preference) {
     return $state
 }
 
+function Read-NativeSidebar {
+    $result=Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('sidebar_attention',{}).then(value=>done({ok:true,value}),()=>done({ok:false}));
+'@
+    Assert-True ($result.ok -and $result.value.collapsed -is [bool]) 'Native sidebar preference is unavailable'
+    return $result.value
+}
+
+function Test-SidebarAttentionAppearance {
+    [void](Wait-Until {Select-NativeView 'content'} 'sidebar controller content')
+    [void](Wait-Until {Execute-JS 'return document.querySelector(".attention-label")?.getAttribute("aria-expanded")==="true"&&!document.querySelector(".attention-save-error");'} 'default expanded attention section')
+    $initial=Read-NativeSidebar
+    Assert-True (-not $initial.collapsed) 'New isolated sidebar did not default to expanded'
+    $before=Execute-JS 'return {top:document.querySelector(".sidebar-section-label").getBoundingClientRect().top,count:document.querySelector(".attention-label b").textContent};'
+    Click-Selector '.attention-label'
+    [void](Wait-Until {Execute-JS 'return document.querySelector(".attention-label")?.getAttribute("aria-expanded")==="false"&&document.querySelector(".attention-list")?.hidden&&!document.querySelector(".attention-save-error");'} 'attention section collapses')
+    [void](Wait-Until {(Read-NativeSidebar).collapsed} 'collapse persisted through actual native IPC')
+    $after=Execute-JS 'return {top:document.querySelector(".sidebar-section-label").getBoundingClientRect().top,count:document.querySelector(".attention-label b").textContent};'
+    Assert-True ($after.top -lt $before.top-80 -and $after.count -ceq $before.count) 'Collapsing attention did not reclaim space or retain its count'
+    $saved=[IO.File]::ReadAllText((Join-Path $script:StateDirectory 'desktop\sidebar.json'))|ConvertFrom-Json
+    Assert-True ($saved.format -eq 1 -and $saved.collapsed -eq $true) 'Sidebar preference was not durably saved'
+    Click-Button 'Mastermind'
+    Assert-True (Execute-JS 'return document.querySelector(".attention-label")?.getAttribute("aria-expanded")==="false";') 'Navigation changed the collapsed preference'
+    Click-Selector '.sidebar-main > .fleet-nav:first-child'
+    [void](Session-WD POST '/refresh' @{})
+    [void](Wait-Until {Execute-JS 'return document.querySelector(".attention-label")?.getAttribute("aria-expanded")==="false"&&!document.querySelector(".attention-save-error");'} 'collapse survives a page reload')
+    $denied=Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('sidebar_attention',{collapsed:'invalid'}).then(()=>done(false),()=>done(true));
+'@
+    Assert-True $denied 'Sidebar command accepted a non-boolean value'
+    try {
+        [void](Wait-Until {Select-NativeView 'chrome'} 'trusted chrome IPC rejection')
+        $denied=Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('sidebar_attention',{collapsed:false}).then(()=>done(false),()=>done(true));
+'@
+        Assert-True $denied 'Chrome was permitted to change controller-only sidebar preferences'
+    } finally {[void](Wait-Until {Select-NativeView 'content'} 'restore sidebar content')}
+    Assert-True (Read-NativeSidebar).collapsed 'Rejected request changed the sidebar preference'
+    $oldApp=$script:NativeIdentity
+    Close-AppSession
+    [void](Wait-Until {
+        $old=Get-Process -Id $oldApp.Id -ErrorAction SilentlyContinue
+        return $null -eq $old -or $old.StartTime.ToUniversalTime().Ticks -ne $oldApp.Started
+    } 'test-owned sidebar app exits')
+    Start-AppSession
+    $controller=Controller-Identity (Fresh-Launch).pid
+    Assert-True ($controller.Id -eq $script:ControllerIdentity.Id -and $controller.Started -eq $script:ControllerIdentity.Started) 'Sidebar relaunch replaced the controller'
+    [void](Wait-Until {Execute-JS 'return window.__RELAY_SIDEBAR_ATTENTION__?.collapsed===true&&document.querySelector(".attention-label")?.getAttribute("aria-expanded")==="false"&&!document.querySelector(".attention-save-error");'} 'native startup bootstrap restores collapsed preference')
+    Click-Selector '.attention-label'
+    [void](Wait-Until {-not (Read-NativeSidebar).collapsed} 'expansion persisted through native IPC')
+    Assert-True (Execute-JS 'return !document.querySelector(".attention-list").hidden;') 'Expanded attention content remained hidden'
+    # Add only a test-owned inert spacer to expose the native scrollbar. No
+    # fleet records, requests, provider sessions or operating-system settings.
+    [void](Execute-JS 'const spacer=document.createElement("div");spacer.style.minHeight="1500px";spacer.setAttribute("aria-hidden","true");spacer.dataset.relayScrollFixture="";document.querySelector(".sidebar-main").append(spacer);')
+    try {
+        foreach($preference in @('dark','light')) {
+            [void](Select-AppAppearance $preference)
+            $palette=Execute-JS @'
+const owner=document.querySelector('.sidebar-main'), style=getComputedStyle(owner), root=getComputedStyle(document.documentElement);
+const probe=document.createElement('div');probe.style.color=root.getPropertyValue('--scrollbar');document.body.append(probe);
+const thumb=getComputedStyle(probe).color;probe.remove();
+return {color:style.scrollbarColor,thumb,overflow:owner.scrollHeight>owner.clientHeight,width:style.scrollbarWidth};
+'@
+            Assert-True ($palette.overflow -and $palette.color.Contains($palette.thumb) -and $palette.color -ne 'auto') 'Native sidebar scrollbar did not use the active palette'
+            if($preference -eq 'dark'){Assert-True ($palette.thumb -eq 'rgb(99, 116, 90)') 'Dark scrollbar palette mismatch'}
+            else{Assert-True ($palette.thumb -eq 'rgb(120, 137, 107)') 'Light scrollbar palette mismatch'}
+            Save-Screenshot ("native-sidebar-$preference.png")
+        }
+    } finally {[void](Execute-JS 'document.querySelectorAll("[data-relay-scroll-fixture]").forEach(node=>node.remove());')}
+    Assert-True (@((API-JSON '/api/hosts/local/runtime/sessions')).Count -eq 0) 'Sidebar checks created a provider session'
+    Write-Host 'PASS: sidebar actual native IPC, collapse/count/layout, navigation/reload and native reopen persistence, invalid/chrome denial, light/dark native scrollbar palettes; no provider session or OS clipboard access'
+}
+
 function Test-NativeAppearance {
     [void](Wait-Until { Select-NativeView 'content' } 'initial native appearance')
     $initial = Read-NativeAppearance
@@ -1155,9 +1233,11 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Driver
 Assert-True ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match 'Microsoft Corporation') 'WebDriver must have a valid Microsoft Authenticode signature'
 Assert-True (-not ($LaunchOnly -and $OverrideBundle)) 'LaunchOnly must use the extracted app default resources'
 Assert-True (-not ($RenderingOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard))) 'RenderingOnly uses SSH and excludes physical-frame and clipboard modes'
-Assert-True (-not ($LocalMastermindOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard -or $RenderingOnly))) 'LocalMastermindOnly is a separate fixture-only rendering mode'
+Assert-True (-not ($LocalMastermindOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard -or $RenderingOnly -or $SidebarOnly))) 'LocalMastermindOnly is a separate fixture-only rendering mode'
 $password = $null
-if (-not ($FrameOnly -or $LaunchOnly -or $LocalMastermindOnly)) {
+Assert-True (-not ($SidebarOnly -and ($LaunchOnly -or $FrameOnly -or $Clipboard -or $RenderingOnly -or $LocalMastermindOnly))) 'SidebarOnly is a separate fixture-only native mode'
+if ($SidebarOnly) { Assert-True ([bool]$ProviderFixture) 'SidebarOnly requires a synthetic provider fixture for account-free discovery' }
+if (-not ($FrameOnly -or $LaunchOnly -or $LocalMastermindOnly -or $SidebarOnly)) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($FixtureTarget)) 'Provide a disposable SSH fixture target'
     Assert-True ($FixtureFingerprint -match '^SHA256:[A-Za-z0-9+/]{40,}={0,2}$') 'Provide the known disposable fixture host fingerprint'
     $password = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $FixturePasswordFile).Path).TrimEnd("`r", "`n")
@@ -1192,7 +1272,7 @@ try {
     $DriverProcess = Start-OwnedProcess $Driver @("--port=$port", '--allowed-ips=127.0.0.1') $TestEnvironment
     [void](Wait-Until { try { (HTTP $DriverHTTP GET "$DriverURL/status").Status -eq 200 } catch { $false } } 'Microsoft Edge WebDriver startup')
     Start-AppSession
-    if (-not ($LaunchOnly -or $RenderingOnly -or $LocalMastermindOnly)) { Test-CustomFrame }
+    if (-not ($LaunchOnly -or $RenderingOnly -or $LocalMastermindOnly -or $SidebarOnly)) { Test-CustomFrame }
     Test-NativeResizeGeometry
     $launch = Fresh-Launch
     $ControllerIdentity = Controller-Identity $launch.pid
@@ -1205,6 +1285,11 @@ try {
     if (@((API-JSON '/api/state').hosts | Where-Object {$_.id -eq 'local'}).Count -gt 0) { $LocalAgentIdentity=Capture-LocalAgentIdentity }
     [void](Wait-Until { Body-Contains 'Connect a machine' } 'isolated Windows fleet')
     Write-Host 'PASS: native PE + Win32 window + WebView2, native controller and independent browser login'
+    if ($SidebarOnly) {
+        Test-SidebarAttentionAppearance
+        Write-Host ('PASS: sidebar native gate; elapsed {0:N2} seconds' -f $clock.Elapsed.TotalSeconds)
+        return
+    }
     if ($LocalMastermindOnly) {
         Test-LocalMastermindRendering
         Write-Host ('PASS: local native rendering gate; elapsed {0:N2} seconds' -f $clock.Elapsed.TotalSeconds)

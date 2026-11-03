@@ -57,6 +57,7 @@ test("desktop preference is authoritative and rejected saves do not falsely chan
     state.__RELAY_APPEARANCE__ = { preference: "dark", resolved: "dark" };
     state.calls = [];
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: { preference?: string }) => {
+      if (command === "sidebar_attention") return { collapsed: false };
       state.calls.push({ command, args });
       if (args.preference === "light") throw new Error("fixture disk denied");
       return { preference: "dark", resolved: "dark" };
@@ -80,7 +81,7 @@ test("desktop preference is authoritative and rejected saves do not falsely chan
 test("new native theme events beat an earlier delayed read and reject malformed values", async ({ page }) => {
   await page.addInitScript(() => {
     const state = window as unknown as { __TAURI_INTERNALS__: unknown; finishAppearance: () => void };
-    state.__TAURI_INTERNALS__ = { invoke: () => new Promise((resolve) => { state.finishAppearance = () => resolve({ preference: "system", resolved: "light" }); }) };
+    state.__TAURI_INTERNALS__ = { invoke: (command: string) => command === "sidebar_attention" ? Promise.resolve({ collapsed: false }) : new Promise((resolve) => { state.finishAppearance = () => resolve({ preference: "system", resolved: "light" }); }) };
   });
   await mockFleet(page);
   await page.emulateMedia({ colorScheme: "light" });

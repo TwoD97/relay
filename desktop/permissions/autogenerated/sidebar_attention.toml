@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sidebar-attention"
+description = "Enables the sidebar_attention command without any pre-configured scope."
+commands.allow = ["sidebar_attention"]
+
+[[permission]]
+identifier = "deny-sidebar-attention"
+description = "Denies the sidebar_attention command without any pre-configured scope."
+commands.deny = ["sidebar_attention"]

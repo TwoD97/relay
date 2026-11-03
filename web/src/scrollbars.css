@@ -1,0 +1,27 @@
+/* Keep native scrolling, platform widths and existing gutters. Only the
+ * palette changes; terminal sizing and scroll ownership stay with xterm. */
+@media (forced-colors: none) {
+  * { scrollbar-color: var(--scrollbar) var(--scrollbar-track); }
+
+  /* Older WebKit versions lack scrollbar-color. Do not impose a width or
+   * hide native buttons: those remain controlled by the operating system. */
+  @supports not (scrollbar-color: auto) {
+    ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+    ::-webkit-scrollbar-thumb:active { background: var(--scrollbar-active); }
+  }
+
+  /* xterm 6 renders its own slider. Override its generated colors, never
+   * its dimensions, visibility, hit target, positioning or scroll behavior. */
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider { background: var(--scrollbar); border-radius: 999px; }
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider:hover { background: var(--scrollbar-hover); }
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider.active { background: var(--scrollbar-active); }
+}
+
+@media (forced-colors: active) {
+  * { scrollbar-color: auto; }
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider { forced-color-adjust: none; background: ButtonText; }
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+  .terminal-canvas .xterm .xterm-scrollable-element > .scrollbar > .slider.active { background: Highlight; }
+}

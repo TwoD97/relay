@@ -57,7 +57,10 @@
   --selection-bg: #47563a;
   --selection-text: #f4f8ef;
   --terminal-bg: #0d1110;
-  --scrollbar: #3c4738;
+  --scrollbar: #63745a;
+  --scrollbar-hover: #7f916f;
+  --scrollbar-active: #a0b887;
+  --scrollbar-track: transparent;
 }
 
 :root[data-theme="light"] {
@@ -115,7 +118,9 @@
   --selection-bg: #c7ddb7;
   --selection-text: #20331c;
   --terminal-bg: #fbfcf9;
-  --scrollbar: #b2c1a6;
+  --scrollbar: #78896b;
+  --scrollbar-hover: #657a55;
+  --scrollbar-active: #526945;
 }
 
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -177,6 +182,8 @@
     --selection-bg: #c7ddb7;
     --selection-text: #20331c;
     --terminal-bg: #fbfcf9;
-    --scrollbar: #b2c1a6;
+    --scrollbar: #78896b;
+    --scrollbar-hover: #657a55;
+    --scrollbar-active: #526945;
   }
 }
