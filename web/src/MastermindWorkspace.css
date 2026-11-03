@@ -169,3 +169,33 @@
   .terminal-expanded .topbar-breadcrumb > svg, .terminal-expanded .topbar-breadcrumb > button:not(.text-button), .terminal-expanded .topbar-breadcrumb > span { display: none; }
   .terminal-expanded .topbar-right > .button, .terminal-expanded .private-badge { display: none; }
 }
+
+/* Pages are a document surface. Coordinator setup remains in Overview. */
+.mastermind-workspace.workspace-view-pages { padding: 12px 16px; gap: 10px; overflow: hidden; }
+.workspace-view-pages .workspace-heading h1 { font-size: 18px; margin: 0; }
+.workspace-view-pages .workspace-heading p, .workspace-view-pages .workspace-eyebrow { display: none; }
+.workspace-view-pages > .workspace-view-navigation { padding-bottom: 6px; }
+.workspace-view-pages > .workspace-view-navigation > button { padding: 7px 12px; }
+.workspace-view-pages .workspace-pages, .workspace-view-pages .workspace-canvas,
+.workspace-view-pages .canvas-document, .workspace-view-pages .canvas-document iframe { min-height: 0; }
+.workspace-view-pages .canvas-page-actions { padding: 7px 10px; gap: 9px; min-height: 42px; }
+.workspace-view-pages .canvas-page-actions h2 { font-size: 12px; }
+.workspace-view-pages .canvas-page-actions .icon-button { height: 28px; width: 28px; }
+.canvas-fit-width[aria-pressed=true] { color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; }
+.canvas-fit-width { padding: 4px 5px; }
+.mastermind-workspace.workspace-view-pages.mastermind-expanded { padding: 0; gap: 0; }
+.workspace-view-pages.mastermind-expanded > .workspace-heading,
+.workspace-view-pages.mastermind-expanded > .workspace-view-navigation,
+.workspace-view-pages.mastermind-expanded .workspace-page-navigation { display: none; }
+.workspace-view-pages.mastermind-expanded .workspace-pages { border: 0; border-radius: 0; }
+.workspace-view-pages.mastermind-expanded .canvas-page-actions small { display: none; }
+.canvas-empty-actions { justify-content: flex-end; }
+@media (max-width: 600px) {
+  .mastermind-workspace.workspace-view-pages { padding: 8px; gap: 8px; }
+  .workspace-view-pages > .workspace-view-navigation > button { padding: 7px 5px; }
+  .workspace-view-pages .workspace-page-navigation { max-height: 140px; }
+  .workspace-view-pages .canvas-page-actions { gap: 6px; }
+  .canvas-fit-width > span { display: none; }
+}
+
+.app-shell.canvas-expanded .topbar { display: none; }

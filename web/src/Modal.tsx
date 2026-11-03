@@ -1,11 +1,13 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
-export function Modal({ title, subtitle, children, onClose, wide = false }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+export function Modal({ title, subtitle, children, onClose, wide = false, restoreFocus }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void; wide?: boolean; restoreFocus?: () => boolean }) {
   const label = useId();
   const dialog = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  const restore = useRef(restoreFocus);
+  restore.current = restoreFocus;
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     const node = dialog.current;
@@ -22,7 +24,7 @@ export function Modal({ title, subtitle, children, onClose, wide = false }: { ti
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     document.addEventListener("keydown", key);
-    return () => { document.removeEventListener("keydown", key); before?.focus(); };
+    return () => { document.removeEventListener("keydown", key); if (restore.current?.() !== false) before?.focus({ preventScroll: true }); };
   }, []);
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={dialog} className={`modal ${wide ? "modal-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={label} tabIndex={-1}>

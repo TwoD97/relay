@@ -23,6 +23,7 @@ from pathlib import Path
 import platform
 import re
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -656,6 +657,103 @@ def check_detached_terminal(browser, desktop, driver_path, environment, log, sec
             os.kill(spawned[0], signal.SIGTERM)
 
 
+def check_machine_resources(browser, second, artifacts):
+    def matching_reading():
+        view = browser.script('''
+            const area=document.querySelector('[aria-label="Machine resources"]');
+            if(!area)return false;
+            const value=label=>area.querySelector(`[aria-label="${label}"] strong`)?.textContent;
+            const cpu=value('CPU usage');if(!cpu?.endsWith('%'))return false;
+            return {sampledAt:area.querySelector('time')?.dateTime,cpu,ram:value('RAM usage'),storage:value('Storage usage'),
+                ramBar:parseFloat(area.querySelector('[aria-label="RAM usage"] .machine-stat-bar i')?.style.width),
+                storageBar:parseFloat(area.querySelector('[aria-label="Storage usage"] .machine-stat-bar i')?.style.width)};
+        ''')
+        if not view:
+            return False
+        sample = second.json('/api/hosts/local/stats')
+        if view['sampledAt'] != sample['sampledAt']:
+            return False
+        return view, sample
+    view, sample = wait_for(matching_reading, 'native machine cards display a current two-reading CPU sample', 20)
+    cpu, memory = sample['cpu'], sample['memory']
+    require(sample['platform'] == 'linux' and cpu['usagePercent'] is not None and 0 <= cpu['usagePercent'] <= 100 and cpu['intervalSeconds'] > 0, 'Native CPU cards do not have measured system counters')
+    require(abs(float(view['cpu'].rstrip('%').replace(',', '.')) - cpu['usagePercent']) <= 0.11, 'Native CPU text disagrees with its API sample')
+    require(memory and memory['usedBytes'] == memory['totalBytes'] - memory['availableBytes'], 'Native RAM counters are inconsistent')
+    root = next(item for item in sample['storage'] if item['scope'] == 'root')
+    require(abs(view['ramBar'] - memory['usedBytes'] / memory['totalBytes'] * 100) < 0.001 and abs(view['storageBar'] - root['usedBytes'] / root['totalBytes'] * 100) < 0.001, 'Native capacity bars disagree with their API counters')
+    browser.click_css('.machine-storage-details > summary')
+    require(browser.script('return document.querySelectorAll(".machine-storage-details dl").length;') == len(sample['storage']), 'Native storage locations were combined or omitted')
+    browser.screenshot(artifacts / 'native-machine-resources.png')
+    (artifacts / 'native-machine-resources.json').write_text(json.dumps({'platform': sample['platform'], 'cpuMeasured': True, 'memoryAvailableSemantics': True, 'separateStorageLocations': len(sample['storage']), 'cardsMatchAPISample': True}, indent=2) + '\n')
+    print('PASS: native CPU/RAM/storage cards agree with read-only OS counters, including two-read CPU and separate storage scopes', flush=True)
+
+
+def check_canvas_layout(browser, second, page_id, artifacts):
+    """Actual opaque document sizing; preview controls never save HTML."""
+    page_path = '/api/mastermind/workspace/pages/' + page_id
+    saved = second.json(page_path)
+    workspace = second.json('/api/mastermind/workspace')
+    route = '#mastermind/pages/' + page_id
+    browser.click_css(f'[role="tab"][id="canvas-tab-{page_id}"]')
+    wait_for(lambda: browser.script('return location.hash;') == route, 'selected native canvas has its own route')
+    require(browser.script('return document.querySelector(".canvas-fit-width")?.getAttribute("aria-pressed");') == 'false', 'Canvas unexpectedly opted into width fitting')
+    require(browser.script('return !document.querySelector(".mastermind,.terminal-shell");'), 'Pages retained coordinator setup or an interactive terminal')
+
+    def frame_widths():
+        frame = browser.call('POST', '/element', {'using': 'css selector', 'value': '.canvas-document iframe'})
+        try:
+            browser.call('POST', '/frame', {'id': frame})
+            return browser.script('const outer=document.querySelector(".native-page-width"),card=document.querySelector(".native-card-width");return outer&&card&&{outer:outer.getBoundingClientRect().width,card:card.getBoundingClientRect().width,viewport:innerWidth};')
+        finally:
+            browser.call('POST', '/frame', {'id': None})
+
+    initial = wait_for(frame_widths, 'native fixed-width authored document renders')
+    require(abs(initial['outer'] - 420) < 1 and abs(initial['card'] - 120) < 1, 'Preview changed authored widths before opt-in')
+    browser.script('''
+        window.relayCanvasMutations=[];
+        const original=window.fetch;
+        window.relayRestoreCanvasFetch=()=>{window.fetch=original;delete window.relayRestoreCanvasFetch;};
+        window.fetch=function(input,init){
+            const method=(init?.method||(input instanceof Request?input.method:'GET')).toUpperCase();
+            if(method!=='GET'&&method!=='HEAD')window.relayCanvasMutations.push(method);
+            return Reflect.apply(original,this,arguments);
+        };
+        window.relayNativeCanvas=document.querySelector('.canvas-document iframe');
+    ''')
+    try:
+        browser.click_css('[aria-label="Fit page width"]')
+        wait_for(lambda: browser.script('return document.querySelector(".canvas-fit-width")?.getAttribute("aria-pressed");') == 'true', 'native page width fitting enabled')
+        fitted = wait_for(lambda: (lambda size: size if size and size['outer'] > initial['outer'] + 100 else None)(frame_widths()), 'fitted native wrapper uses available preview width')
+        require(abs(fitted['card'] - 120) < 1 and abs(fitted['outer'] - (fitted['viewport'] - 32)) < 2, 'Fit changed nested card width or failed to fill the outer page')
+        browser.click_css('[aria-label="Expand page to full window"]')
+        wait_for(lambda: browser.script('return location.hash;') == route + '/window', 'expanded page keeps its exact page route')
+        def expanded_geometry():
+            return browser.script('''
+                const frame=document.querySelector('.canvas-document iframe'),r=frame?.getBoundingClientRect();
+                const visible=selector=>[...document.querySelectorAll(selector)].some(node=>node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0);
+                if(!r||r.left>2||r.right<innerWidth-2||r.bottom<innerHeight-2||r.top>64||r.height<innerHeight-64)return false;
+                if(visible('.sidebar,.topbar,.workspace-heading,.workspace-view-navigation,.workspace-page-navigation'))return false;
+                return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight};
+            ''')
+        geometry = wait_for(expanded_geometry, 'expanded native iframe fills the content window below its compact controls')
+        require(browser.script('return window.relayNativeCanvas===document.querySelector(".canvas-document iframe")&&window.relayNativeCanvas.getAttribute("sandbox")==="";'), 'Expansion remounted or weakened the sandboxed document')
+        expanded_widths = wait_for(frame_widths, 'expanded fitted canvas renders')
+        require(abs(expanded_widths['outer'] - (expanded_widths['viewport'] - 32)) < 2 and abs(expanded_widths['card'] - 120) < 1, 'Expanded fit changed inner card layout')
+        browser.screenshot(artifacts / 'native-mastermind-page-expanded.png')
+        browser.click_css('[aria-label="Restore page layout"]')
+        wait_for(lambda: browser.script('return location.hash;') == route, 'native page restore keeps the selected page')
+        require(browser.script('return document.querySelector(".workspace-page-navigation").getBoundingClientRect().width>0&&document.querySelector(".workspace-view-navigation").getBoundingClientRect().height>0;'), 'Restore did not return normal page navigation')
+        browser.click_css('[aria-label="Fit page width"]')
+        restored = wait_for(lambda: (lambda size: size if size and abs(size['outer'] - 420) < 1 else None)(frame_widths()), 'turning Fit off restores authored width')
+        require(abs(restored['card'] - 120) < 1, 'Turning Fit off altered the nested card')
+        require(browser.script('return window.relayCanvasMutations.length;') == 0, 'Canvas preview controls issued an API mutation')
+        require(second.json(page_path) == saved and second.json('/api/mastermind/workspace') == workspace, 'Canvas preview controls changed saved HTML or workspace metadata')
+        (artifacts / 'native-mastermind-page-layout.json').write_text(json.dumps({'authored': initial, 'fitted': fitted, 'expanded': geometry, 'restored': restored, 'savedHTMLUnchanged': True, 'apiMutations': 0}, indent=2) + '\n')
+        print('PASS: native HTML page expands without remounting, fits only outer width, preserves sandbox and makes no saved-page changes', flush=True)
+    finally:
+        browser.script('window.relayRestoreCanvasFetch?.();')
+
+
 def check_local_mastermind(browser, second, state, artifacts):
     # The disposable codex executable below is an interactive /bin/sh fixture.
     # Exercise the agent's private CLI capability from its actual PTY; no account
@@ -676,7 +774,8 @@ def check_local_mastermind(browser, second, state, artifacts):
     browser.check_terminal_geometry(nested)
     cols = browser.script('return Number(document.querySelector(".terminal-shell").dataset.terminalCols);')
     require(cols > 40, 'Wide Mastermind panel still renders a tiny terminal grid')
-    browser.terminal_command("printf '<h1>Native canvas proof</h1><p>Published from the local coordinator.</p><div style=\"height:1800px\"></div><p>End of native canvas proof</p>' > native-plan.html")
+    fixture_html = '<main class="native-page-width" style="width:420px;max-width:420px;margin:0 auto"><h1>Native canvas proof</h1><p>Published from the local coordinator.</p><aside class="native-card-width" style="width:120px">Nested card</aside><div style="height:1800px"></div><p>End of native canvas proof</p></main>'
+    browser.terminal_command("printf '%s' " + shlex.quote(fixture_html) + ' > native-plan.html')
     browser.terminal_command('"$RELAY_BIN" workspace pages create --revision 0 --title "Native plan" --html-file native-plan.html')
     workspace = wait_for(lambda: (lambda record: record if record.get('revision') == 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
     browser.terminal_command('"$RELAY_BIN" workspace tasks create --revision 1 --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
@@ -702,11 +801,12 @@ def check_local_mastermind(browser, second, state, artifacts):
             color = browser.script('return getComputedStyle(document.documentElement).scrollbarColor;')
             require(re.sub(r'\s+', '', color) == SCROLLBAR_COLORS[theme] + 'rgba(0,0,0,0)', 'Canvas scrollbar palette disagrees with Relay')
             browser.script('window.scrollTo(0,document.documentElement.scrollHeight);')
-            wait_for(lambda: browser.script("const end=document.querySelector('body > p:last-child');return document.scrollingElement.scrollTop>0&&end?.textContent==='End of native canvas proof'&&end.getBoundingClientRect().bottom<=innerHeight+1;"), 'last canvas content reachable by native scrolling')
+            wait_for(lambda: browser.script("const end=document.querySelector('.native-page-width > p:last-child');return document.scrollingElement.scrollTop>0&&end?.textContent==='End of native canvas proof'&&end.getBoundingClientRect().bottom<=innerHeight+1;"), 'last canvas content reachable by native scrolling')
             browser.script('window.scrollTo(0,0);')
         finally:
             browser.call('POST', '/frame', {'id':None})
     browser.screenshot(artifacts / 'native-mastermind-pages.png')
+    check_canvas_layout(browser, second, workspace['pages'][0]['id'], artifacts)
     browser.select_mastermind_view('Tasks')
     wait_for(lambda: browser.script('return document.querySelector(\'article[aria-label="Verify native terminal"] select\')?.value==="done";'), 'native tasks view shows the agent-authored completed task')
     require(browser.script('return !document.querySelector(".terminal-shell,.canvas-document iframe");'), 'Tasks view unexpectedly retained another workspace view')
@@ -722,6 +822,105 @@ def check_local_mastermind(browser, second, state, artifacts):
     status, _ = second.request('/api/hosts/local/runtime/sessions/'+live['session']['id'], 'DELETE')
     require(status == 204, 'Could not remove disposable coordinator')
     print('PASS: native Mastermind terminal geometry, separate pages/tasks views, private agent CLI and persistent coordinator', flush=True)
+
+
+def check_terminal_panes(browser, second, original, artifacts):
+    """Four disposable real PTYs: independent input, native layout and view-only close."""
+    originals = second.json('/api/hosts/local/runtime/sessions')
+    first = next(item for item in originals if item['id'] == original)
+    records = [first]
+    added = []
+    pane = lambda session: f'.terminal-pane[data-pane-session="{session}"]'
+    def text(session):
+        return browser.script('return document.querySelector(arguments[0]+" .xterm-rows")?.textContent||"";', pane(session))
+    def controlled(session):
+        return browser.script('return document.querySelector(arguments[0]+" .terminal-link")?.textContent.trim()==="Controlling";', pane(session))
+    def send(session, command):
+        element = browser.find('css selector', pane(session) + ' textarea.xterm-helper-textarea')
+        keys = command + '\ue007'
+        browser.call('POST', f'/element/{element}/value', {'text': keys, 'value': list(keys)})
+    def geometry(session=None):
+        return browser.script('''
+            const panes=[...document.querySelectorAll('.terminal-pane:not([hidden])')].filter(pane=>!arguments[0]||pane.dataset.paneSession===arguments[0]);
+            if(!panes.length)return false;
+            const result=[];
+            for(const pane of panes){
+                const shell=pane.querySelector('.terminal-shell'),canvas=pane.querySelector('.terminal-canvas'),screen=pane.querySelector('.xterm-screen');
+                if(!shell||!canvas||!screen)return false;
+                const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows),b=canvas.getBoundingClientRect(),s=screen.getBoundingClientRect(),css=getComputedStyle(canvas);
+                if(!cols||!rows||pane.querySelectorAll('.xterm-rows > div').length!==rows||!s.width||!s.height)return false;
+                if(s.left<b.left+parseFloat(css.paddingLeft)-1||s.top<b.top+parseFloat(css.paddingTop)-1||s.right>b.left+canvas.clientWidth-parseFloat(css.paddingRight)+1||s.bottom>b.top+canvas.clientHeight-parseFloat(css.paddingBottom)+1)return false;
+                result.push({id:pane.dataset.paneSession,cols,rows});
+            }
+            return result;
+        ''', session)
+    try:
+        for index in range(2, 5):
+            status, body = second.request('/api/hosts/local/runtime/sessions', 'POST', {'harness': 'shell', 'title': f'Native pane {index}', 'workspace': 'Native pane proof', 'cwd': first['cwd']})
+            require(status == 201, 'Could not create test-owned pane session')
+            created = json.loads(body)
+            require(re.fullmatch(r'[0-9a-f]{32}', created['id']), 'Unexpected native pane session ID')
+            added.append(created); records.append(created)
+        browser.call('POST', '/url', {'url': second.origin + '/#host/local/session/' + original})
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane .xterm").length;') == 1, 'original pane restored')
+        for index, record in enumerate(added, 2):
+            browser.click_css(pane(original) + ' [aria-label="Add terminal pane"]')
+            browser.click_css(f'[aria-label="{record["title"]} on This computer"]')
+            wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane .xterm").length;') == index, 'next real PTY pane attached')
+        browser.script('window.relayNativePaneNodes=[...document.querySelectorAll(".terminal-pane .xterm")];')
+        for index, record in enumerate(records, 1):
+            browser.click_css(pane(record['id']) + ' .terminal-canvas')
+            wait_for(lambda: controlled(record['id']), 'pane owns only its terminal lease')
+            wait_for(lambda: geometry(record['id']), 'controlled native grid fits its pane')
+            send(record['id'], f"printf 'RELAY_PANE_%s ' '{index}_OWNED'; stty size")
+            wait_for(lambda: f'RELAY_PANE_{index}_OWNED ' in second.history(record['id']), 'scoped pane PTY input and size output')
+        sizes = wait_for(geometry, 'four fitted native grids after control acknowledgements')
+        require(len(sizes) == 4, 'Native workspace did not retain all four panes')
+        for index, record in enumerate(records, 1):
+            output = second.history(record['id'])
+            size = next(item for item in sizes if item['id'] == record['id'])
+            require(re.search(rf'RELAY_PANE_{index}_OWNED\s+{size["rows"]}\s+{size["cols"]}(?:\r?\n)', output), 'Real PTY size disagrees with its native pane')
+            require(all(f'RELAY_PANE_{other}_OWNED ' not in output for other in range(1, 5) if other != index), 'Input leaked into another native pane')
+        browser.screenshot(artifacts / 'native-four-panes.png')
+
+        watched = records[-1]['id']
+        browser.click_css(pane(watched) + ' .terminal-toolbar > .text-button:last-child')
+        wait_for(lambda: browser.script('return document.querySelector(arguments[0]+" .terminal-link")?.textContent.trim()==="Watching";', pane(watched)), 'fourth pane releases control')
+        status, _ = second.request(f'/api/hosts/local/runtime/sessions/{watched}/input', 'POST', {'data': "i=0; while [ \"$i\" -lt 120 ]; do printf 'NATIVE_SCROLL_%03d\\n' \"$i\"; i=$((i+1)); done; printf 'SCROLL_%s\\n' 'DONE'\r"})
+        require(status == 204, 'Could not write test-owned scrollback after releasing its lease')
+        wait_for(lambda: 'SCROLL_DONE' in text(watched), 'scrollback output reaches the fourth pane')
+        scroll_geometry = browser.script('const p=document.querySelector(arguments[0]);const t=p.querySelector(".terminal-shell"),bar=p.querySelector(".scrollbar.vertical").getBoundingClientRect(),thumb=p.querySelector(".scrollbar.vertical > .slider").getBoundingClientRect();return {cols:t.dataset.terminalCols,rows:t.dataset.terminalRows,x:thumb.x+thumb.width/2,from:thumb.y+thumb.height/2,to:bar.y+thumb.height/2};', pane(watched))
+        browser.call('POST', '/actions', {'actions': [{'type': 'pointer', 'id': 'native-pane-scroll', 'parameters': {'pointerType': 'mouse'}, 'actions': [
+            {'type': 'pointerMove', 'duration': 0, 'x': round(scroll_geometry['x']), 'y': round(scroll_geometry['from'])},
+            {'type': 'pause', 'duration': 150}, {'type': 'pointerDown', 'button': 0},
+            {'type': 'pointerMove', 'duration': 250, 'x': round(scroll_geometry['x']), 'y': round(scroll_geometry['to'])},
+            {'type': 'pointerUp', 'button': 0}]}]})
+        wait_for(lambda: 'NATIVE_SCROLL_000' in text(watched), 'actual native scrollbar drag reveals historical output')
+        require(not controlled(watched), 'Dragging a native scrollbar claimed the terminal writer')
+        require(browser.script('const t=document.querySelector(arguments[0]+" .terminal-shell");return [t.dataset.terminalCols,t.dataset.terminalRows];', pane(watched)) == [scroll_geometry['cols'], scroll_geometry['rows']], 'Scrollbar drag resized the watched PTY')
+
+        hidden_sizes = {record['id']: browser.script('const t=document.querySelector(arguments[0]+" .terminal-shell");return [t.dataset.terminalCols,t.dataset.terminalRows];', pane(record['id'])) for record in records[1:]}
+        before_zoom = browser.script('return Number(document.querySelector(arguments[0]+" .terminal-shell").dataset.terminalCols);', pane(original))
+        browser.click_css(pane(original) + ' [aria-label="Expand terminal to full window"]')
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane:not([hidden])").length;') == 1, 'one pane zoomed')
+        wait_for(lambda: browser.script('return Number(document.querySelector(arguments[0]+" .terminal-shell").dataset.terminalCols);', pane(original)) > before_zoom, 'zoomed owner receives its expanded PTY geometry')
+        require(browser.script('return window.relayNativePaneNodes.every(node=>node.isConnected)&&document.querySelectorAll(".terminal-pane[hidden][inert]").length===3;'), 'Zoom remounted or left background panes interactive')
+        for session, size in hidden_sizes.items():
+            require(browser.script('const t=document.querySelector(arguments[0]+" .terminal-shell");return [t.dataset.terminalCols,t.dataset.terminalRows];', pane(session)) == size, 'Zoom resized a hidden PTY to zero')
+        browser.click_css(pane(original) + ' [aria-label="Restore workspace layout"]')
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane:not([hidden])").length;') == 4, 'four-pane layout restored')
+        wait_for(geometry, 'restored native grids fit again')
+        browser.click_css(pane(watched) + ' [aria-label="Close pane"]')
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane").length;') == 3, 'one viewer closed')
+        alive = second.json('/api/hosts/local/runtime/sessions')
+        require(all(any(item['id'] == record['id'] and item['createdAt'] == record['createdAt'] and item['status'] == 'running' for item in alive) for record in records), 'Closing a pane removed or replaced a real session')
+        require(browser.script('return window.relayNativePaneNodes.slice(0,3).every(node=>node.isConnected);'), 'Closing one pane remounted another')
+        (artifacts / 'native-four-panes.json').write_text(json.dumps({'geometry': sizes, 'scrollbarDidNotClaim': True, 'zoomKeptFourMounted': True, 'closedPaneKeptAllSessions': True}, indent=2) + '\n')
+        print('PASS: four real native PTY panes isolate input, fit geometry, scroll without claiming, preserve mounts on zoom and keep sessions on view close', flush=True)
+    finally:
+        for record in added:
+            with contextlib.suppress(Exception):
+                second.request('/api/hosts/local/runtime/sessions/' + record['id'], 'DELETE')
 
 
 def run(args):
@@ -816,6 +1015,7 @@ def run(args):
 
                 browser.click_css(".host-select")
                 wait_for(lambda: browser.body_contains("Make room for your next idea."), "local host view")
+                check_machine_resources(browser, second, artifacts)
                 browser.click_button("New session")
                 project = root / "native project with spaces"
                 project.mkdir()
@@ -878,6 +1078,11 @@ def run(args):
                 browser.screenshot(artifacts / "native-reopened.png")
                 print("PASS: native close/reopen preserves controller, runtime, terminal and input", flush=True)
                 check_local_mastermind(browser, second, state, artifacts)
+                check_terminal_panes(browser, second, session, artifacts)
+                # The pane test changes the canonical grid and writes newer
+                # output. Verify earlier output in history, then use the latest
+                # visible marker for the subsequent snapshot-replay assertion.
+                require('RELAY_REOPEN_INPUT_OK' in second.history(session), 'Pane resizing lost earlier session output')
                 # A new controller origin must not lose native preferences or
                 # the live shell. Stop only the PID + creation time owned above.
                 old_origin = second.origin
@@ -898,7 +1103,8 @@ def run(args):
                 require(browser.appearance() == {'preference': 'light', 'resolved': 'light'}, "Appearance changed during controller restart")
                 browser.screenshot(artifacts / 'native-attention-new-origin.png')
                 browser.call('POST', '/url', {'url': second.origin + '/#host/local/session/' + session})
-                wait_for(lambda: browser.terminal_contains('RELAY_REOPEN_INPUT_OK'), 'same terminal restored after controller origin change')
+                wait_for(lambda: browser.terminal_contains('RELAY_PANE_1_OWNED'), 'same terminal restores its latest screen after controller origin change')
+                require('RELAY_REOPEN_INPUT_OK' in second.history(session), 'Controller origin change lost earlier session output')
                 print('PASS: native sidebar preference survives close/reopen and controller origin change while the PTY remains running', flush=True)
                 status, _ = second.request(f"/api/hosts/local/runtime/sessions/{session}", "DELETE")
                 require(status == 204, "Could not remove test-owned shell session")

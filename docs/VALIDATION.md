@@ -585,3 +585,55 @@ All 94 focused desktop/phone checks passed, alongside TypeScript checking and
 native Rust tests (23 on Linux, 21 on Windows) with strict Clippy checks. The
 scrollback test drags the real thumb through its range; it does not assume that
 xterm maps one large mouse-wheel event to a jump through the entire buffer.
+
+## Terminal panes and compact navigation — 2026-11-03
+
+Desktop version: `0.3.4`.
+
+Session headers keep the title and actions together; optional metadata lives
+under Session details. Approval requests and connection warnings remain visible.
+The sidebar no longer repeats the native window's Relay logo.
+
+The terminal workspace supports one to four sessions from any connected machine.
+Each pane retains its own host, session identity, WebSocket, writer lease, and
+terminal renderer. Selecting an existing pane, adding another, or expanding one
+does not recreate the other terminals. Closing a pane detaches its viewer only;
+terminating a session still requires the separate confirmation. Layout links
+reject duplicate, malformed, or excessive pane references. A changed session
+creation time requires explicit reselection rather than silently rebinding.
+
+Regression coverage checks cross-machine sessions with identical session IDs,
+isolated keyboard input, independent reconnect/control, four-pane and narrow
+layouts, close/expand/restore, direct creation into a pane, missing machines,
+changed session identities, and picker focus. Both picker and successful session
+creation preserve the newly selected pane after their dialogs close.
+
+Scrollbar gestures no longer request terminal control or focus. Read-only
+alternate-screen viewers can scroll an oversized viewport, and historical output
+stays anchored through an explicit control claim's resize. Setup reconnects do
+not steal focus from another input. Native four-PTY checks use disposable shells
+to compare real stty dimensions, isolated output, unchanged identities, and
+session survival after closing a pane; no personal sessions are used.
+
+Mastermind Pages uses the available workspace height and can expand to the full
+content area. Expanding and restoring keep the same sandboxed iframe and page
+selection. Optional Fit page width adapts only outer page wrappers; authored
+nested cards and stored HTML remain unchanged. Regression checks cover geometry,
+navigation restoration, sandbox/content-policy enforcement, and unchanged data.
+
+Machine overviews show CPU, physical RAM, and filesystem capacity. The controller
+collects remote Linux counters over its existing SSH connection, independently of
+runtime version, and uses native system counters on Windows. CPU percentages use
+two cumulative counter readings; unavailable, reset, or old samples never imply
+zero usage. Root/system and home filesystem values remain separate, not summed.
+Polling pauses when the view is hidden or unmounted, coalesces concurrent reads,
+and labels retained readings after a failure or disconnect. Per-connection cache
+identity prevents a late response from becoming another machine's statistics.
+
+Tests cover counter arithmetic, malformed/partial resource output, authenticated
+API access, bounded cancellation/concurrency, offline/reconnected machines, and
+real disposable SSH collection before runtime installation. Native Windows
+read-only tests verify API structure layout, cancellation, physical RAM, fixed
+drive capacity, and bounded CPU deltas. Browser coverage verifies loading,
+sampling, partial failures, stale recovery, late host replies, visibility and
+non-overlapping polls at desktop and narrow sizes.

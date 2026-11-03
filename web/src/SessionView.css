@@ -1,0 +1,47 @@
+/* Session chrome stays small at both full width and a half-width terminal pane. */
+.session-view.session-view-compact { min-width: 0; container-type: inline-size; container-name: session-pane; }
+.session-view.session-view-compact > .session-heading-compact { flex-shrink: 0; min-height: 44px; padding: 6px 10px; gap: 4px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--surface); }
+.session-heading-compact > .session-heading-identity { display: flex; align-items: center; gap: 10px; flex: 1 1 150px; min-width: 0; }
+.session-heading-identity > .session-title-editor { flex: 1; min-width: 0; }
+.session-heading-compact > .session-heading-identity:has(.session-title-form) { flex-basis: 260px; }
+.session-heading-compact .session-title-line { gap: 3px; }
+.session-heading-compact .session-title-line h1 { flex: 1; min-width: 0; font-size: 13px; line-height: 1.5; letter-spacing: -.15px; }
+.session-heading-compact .session-title-button { width: 100%; }
+.session-heading-compact .session-title-form { gap: 3px; }
+.session-heading-compact .session-title-form input { flex: 1; width: 100%; padding: 5px 7px; font-size: 12px; }
+.session-heading-compact .session-rename-error { white-space: normal; overflow-wrap: anywhere; }
+.session-heading-compact > .session-heading-controls { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 0 0 auto; min-width: 0; margin-left: auto; }
+.session-view-compact .session-heading-compact .icon-button { width: 28px; height: 28px; }
+.session-heading-compact .session-status { margin-right: 4px; font-size: 9px; }
+.session-heading-compact .terminal-window-actions { flex: 0 0 auto; gap: 1px; }
+.session-heading-compact .session-pane-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.session-host-link { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; max-width: 130px; min-width: 0; padding: 4px 0; font-size: 10px; color: var(--muted); }
+.session-host-link > svg { flex-shrink: 0; }
+.session-host-link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-host-link:hover { color: var(--accent-text); }
+.session-details-toggle[aria-expanded="true"] { color: var(--accent-text); background: var(--accent-soft); }
+.session-details-panel { flex-shrink: 0; padding: 8px 12px; background: var(--surface-subtle); border-bottom: 1px solid var(--line); }
+.session-details-panel[hidden] { display: none; }
+.session-detail-context { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 14px; color: var(--text-secondary); font-size: 10px; }
+.session-detail-path { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; color: var(--muted); font: 10px/1.5 var(--mono); }
+.session-detail-path > svg { flex-shrink: 0; margin-top: 1px; }
+.session-detail-path > span { min-width: 0; overflow-wrap: anywhere; }
+/* The shared notice keeps pending approval requests visible. Only its optional
+   provider-support details follow this panel's disclosure state. */
+.session-view-compact:not(.session-details-open) > .permission-support { display: none; }
+.session-view-compact > .permission-support { margin: 0; padding: 8px 12px; background: var(--surface-subtle); border-bottom: 1px solid var(--line); }
+.session-view-compact > .terminal-banner { flex-shrink: 0; padding: 7px 12px; }
+.session-view-compact > .inline-error { flex-shrink: 0; }
+@container session-pane (max-width: 580px) {
+  .session-heading-compact > .session-heading-identity { gap: 5px; flex-basis: 125px; }
+  .session-heading-compact .session-host-link { max-width: 76px; font-size: 9px; }
+  .session-heading-compact .session-heading-controls { gap: 2px; }
+  .session-heading-compact .session-status { margin-right: 2px; }
+}
+@container session-pane (max-width: 480px) {
+  .session-view.session-view-compact > .session-heading-compact { padding: 4px 7px; gap: 2px 7px; }
+  .session-heading-compact > .session-heading-identity { flex: 1 0 100%; min-height: 28px; }
+  .session-heading-compact > .session-heading-identity:has(.session-title-form) { flex-basis: 100%; }
+  .session-heading-compact .session-host-link { max-width: 120px; }
+  .session-heading-compact .session-heading-controls { flex: 1 0 100%; margin-left: 0; }
+}

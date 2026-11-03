@@ -44,7 +44,7 @@ test("legacy Mastermind page links retain the page and expanded state with canon
   await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${secondPage}/window$`));
   await expect(page.locator(".app-shell")).toHaveClass(/terminal-expanded/);
   await expect(page.frameLocator('iframe[title="Architecture canvas"]').getByRole("heading", { name: "System map" })).toBeVisible();
-  await page.getByRole("button", { name: "Restore workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Restore page layout", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${secondPage}$`));
   await expect(page.locator(".app-shell")).not.toHaveClass(/terminal-expanded/);
   await page.getByRole("tab", { name: "Plan", exact: true }).click();

@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { ArrowUpRight, Bell, BrainCircuit, ChevronDown, ChevronRight, Folder, Layers3, Plus, Search, Server, Terminal, X } from "lucide-react";
+import { ArrowUpRight, Bell, BrainCircuit, ChevronDown, ChevronRight, Folder, Layers3, PanelsTopLeft, Plus, Search, Server, Terminal, X } from "lucide-react";
 import type { FleetState, Host, Selection, Session } from "./types";
 import { approvalActionable, pendingApprovals } from "./Approvals";
 import { maintenanceNeedsAttention } from "./MaintenanceJobs";
 import { useSidebarAttention } from "./sidebarAttention";
+import "./SidebarCompact.css";
 
 export function HostStatus({ host, compact = false }: { host: Host; compact?: boolean }) {
   return <span className={`status-pill status-${host.status}`}><span className="status-dot" />{compact ? host.status === "online" ? "Online" : host.status === "error" ? "Needs attention" : host.status === "disconnected" ? "Offline" : "Connecting" : host.status[0].toUpperCase() + host.status.slice(1)}</span>;
@@ -21,7 +22,7 @@ function readCollapsed(): Record<string, boolean> {
   try { const value: unknown = JSON.parse(localStorage.getItem("relay-collapsed") ?? "{}"); return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, boolean> : {}; } catch { return {}; }
 }
 
-export function Sidebar({ state, selected, mobileOpen, onClose, onSelect, onAdd }: { state: FleetState; selected: Selection; mobileOpen: boolean; onClose: () => void; onSelect: (selection: Selection) => void; onAdd: () => void }) {
+export function Sidebar({ state, selected, terminalWorkspace, mobileOpen, onClose, onSelect, onAdd }: { state: FleetState; selected: Selection; terminalWorkspace?: Selection; mobileOpen: boolean; onClose: () => void; onSelect: (selection: Selection) => void; onAdd: () => void }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const attentionPreference = useSidebarAttention();
@@ -49,9 +50,10 @@ export function Sidebar({ state, selected, mobileOpen, onClose, onSelect, onAdd 
   return <>
     {mobileOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={onClose} />}
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`} aria-label="Fleet navigation" inert={mobile && !mobileOpen} aria-hidden={mobile && !mobileOpen ? true : undefined}>
-      <div className="brand-row"><button className="brand" onClick={() => select(null)} aria-label="Relay home"><svg className="brand-mark" aria-hidden="true" viewBox="0 0 28 28"><path d="M7 21 21 7" /><circle cx="7" cy="21" r="4" /><circle cx="21" cy="7" r="4" /></svg><span>relay<span className="brand-period">.</span></span></button><button className="icon-button mobile-close" aria-label="Close navigation" onClick={onClose}><X size={18} /></button></div>
+      <div className="sidebar-mobile-header"><span>Navigation</span><button className="icon-button mobile-close" aria-label="Close navigation" onClick={onClose}><X size={18} /></button></div>
       <div className="sidebar-main"><button className={`fleet-nav ${!selected ? "active" : ""}`} onClick={() => select(null)}><Layers3 size={17} /><span>Fleet overview</span><span className="nav-count">{state.hosts.length}</span></button>
         <button className={`fleet-nav ${selected?.view === "mastermind" ? "active" : ""}`} onClick={() => select({ view: "mastermind" })}><BrainCircuit size={17} /><span>Mastermind</span></button>
+        {terminalWorkspace && <button className={`fleet-nav ${(selected?.panes?.length ?? 0) > 1 ? "active" : ""}`} onClick={() => select(terminalWorkspace)}><PanelsTopLeft size={17} /><span>Terminals</span><span className="nav-count">{terminalWorkspace.panes?.length ?? 1}</span></button>}
         <button className={`fleet-nav ${selected?.view === "activity" ? "active" : ""}`} onClick={() => select({ view: "activity" })}><Bell size={17} /><span>Activity</span>{approvals > 0 && <span className="nav-count" aria-label={`${approvals} pending approvals`}>{approvals}</span>}</button>
         <label className="sidebar-search"><Search size={15} /><input aria-label="Filter machines and sessions" placeholder="Find a machine or session…" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button aria-label="Clear filter" onClick={() => setQuery("")}><X size={13} /></button>}</label>
         <section className={`attention-pins ${attentionCount + approvals ? "" : "attention-quiet"} ${attentionPreference.collapsed ? "attention-collapsed" : ""}`} aria-label="Needs attention"><button type="button" className="attention-label" aria-label={`${attentionPreference.collapsed ? "Expand" : "Collapse"} needs attention`} aria-expanded={!attentionPreference.collapsed} aria-controls={attentionListId} aria-describedby={`${attentionListId}-count`} onClick={attentionPreference.toggle}><Bell size={12} /><span>NEEDS ATTENTION</span><b id={`${attentionListId}-count`} aria-label={`${attentionCount + approvals} items need attention`}>{attentionCount + approvals}</b>{attentionPreference.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button><div className="attention-list" id={attentionListId} hidden={attentionPreference.collapsed} tabIndex={0} aria-label="Attention items">

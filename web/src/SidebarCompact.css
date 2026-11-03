@@ -1,0 +1,7 @@
+/* Native chrome supplies the Relay brand; navigation starts with its actions. */
+.sidebar > .sidebar-mobile-header { display: none; }
+.sidebar > .sidebar-main { padding-top: 12px; }
+@media (max-width: 800px) {
+  .sidebar > .sidebar-mobile-header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 7px 12px 0 17px; color: var(--muted); font-size: 11px; }
+  .sidebar > .sidebar-main { padding-top: 8px; }
+}

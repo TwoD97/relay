@@ -16,7 +16,7 @@ function running() {
 }
 async function workspace(page: Page, view: "overview" | "pages" | "tasks" | "terminal" = "pages") {
   await page.goto(view === "overview" ? "/#mastermind" : `/#mastermind/${view}`);
-  await expect(page.getByRole("heading", { name: "Mastermind", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: view === "pages" ? "Pages" : "Mastermind", exact: true, level: 1 })).toBeVisible();
 }
 const views = (page: Page) => page.getByRole("navigation", { name: "Mastermind views", exact: true });
 

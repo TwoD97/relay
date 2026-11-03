@@ -39,6 +39,7 @@ export function AddHost({ onClose, onCreated }: { onClose: () => void; onCreated
 export function NewSession({ host, harnesses, capabilitiesCurrent, existing, onClose, onCreated }: { host: Host; harnesses: Harness[]; capabilitiesCurrent: boolean; existing: Session[]; onClose: () => void; onCreated: (session: Session, notice?: string) => void }) {
   const mounted = useRef(true);
   const submitting = useRef(false);
+  const createdSuccessfully = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const latest = [...existing].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
   const [title, setTitle] = useState("");
@@ -73,12 +74,12 @@ export function NewSession({ host, harnesses, capabilitiesCurrent, existing, onC
       const recordedMode = harness !== "shell" && latestSupport.current.modes?.includes(agentMode) ? agentMode : undefined;
       const created = await api.createSession(host.id, { title: title.trim() || options.find((item) => item.id === harness)!.name, workspace: workspace.trim(), cwd, harness, ...(recordedMode ? { agentMode: recordedMode } : {}) });
       if (recordedMode && created.agentMode !== recordedMode) notice = [notice, "The session started, but its runtime did not confirm the requested launch mode. Check the terminal; Relay has not repeated the launch."].filter(Boolean).join(" ");
-      if (mounted.current) onCreated(created, notice);
+      if (mounted.current) { createdSuccessfully.current = true; onCreated(created, notice); }
     }
     catch (error) { setError(errorMessage(error)); setBusy(false); }
     finally { submitting.current = false; }
   };
-  return <Modal title="Start a session" subtitle={`A fresh terminal on ${host.name}.`} onClose={onClose}>
+  return <Modal title="Start a session" subtitle={`A fresh terminal on ${host.name}.`} restoreFocus={() => !createdSuccessfully.current} onClose={onClose}>
     <form className="modal-body form-stack" onSubmit={(event) => void submit(event)}>
       <fieldset className="harness-picker" disabled={busy}><legend>Run</legend><div className="harness-options">{options.map((option) => {
         const available = option.id === "shell" || harnesses.some((item) => item.id === option.id && item.installed);

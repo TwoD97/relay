@@ -36,7 +36,7 @@ Close the existing Relay window before installing or opening a different build;
 otherwise, single-instance activation focuses the already running copy. Closing
 the window leaves its controller and remote sessions running. Install over the
 existing installation, then open Relay from the Start menu. The desktop package
-version is `0.3.3`; reinstalling that same version may offer **Add/Reinstall**.
+version is `0.3.4`; reinstalling that same version may offer **Add/Reinstall**.
 The bundled runtime has its own build version and the launcher checks it before
 reusing or replacing the local controller.
 
@@ -44,6 +44,31 @@ The **Needs attention** heading in the sidebar can collapse its notification
 list. The count stays visible, new notifications respect the collapsed state,
 and the desktop remembers the choice after reopening. Scrollbars follow the
 app's light or dark appearance, including terminals and Mastermind pages.
+
+Terminal views have a compact header. **Session details** reveals the project
+folder, agent mode, and permission support; requests that need attention remain
+visible. The Relay logo appears in the window title bar only.
+
+Use **Add terminal pane** in a session header to view up to four sessions from
+any machine, or start a new session in the next pane. Two panes sit side by side;
+three or four use a grid, and narrow windows stack them. Clicking a pane selects
+it. Sidebar session selections target the active pane. **Close pane** removes
+only that viewer, while **End and remove session** still asks before terminating
+the process. Expanding one pane preserves the other viewers until you restore
+the layout. The **Terminals** navigation entry returns to the current layout
+after visiting another view.
+
+Mastermind's **Pages** view gives the canvas the remaining workspace height.
+**Expand page to full window** hides the navigation and page list while retaining
+the restore button. **Fit page width** can expand an authored page's outer shell
+without changing its saved HTML or the dimensions of nested cards.
+
+Each machine overview shows live CPU usage, RAM used/available, and storage
+used/available. Readings refresh every five seconds while the view is visible;
+CPU usage needs two readings. Storage locations are listed separately because
+root and home can share the same filesystem. Disconnections and refresh failures
+label any retained reading as the last sample. Remote Linux readings use the
+existing SSH connection, so this feature does not require restarting a runtime.
 
 Installed and portable copies use the same Windows account data:
 

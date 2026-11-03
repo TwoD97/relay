@@ -145,6 +145,7 @@ func TestRealSSH(t *testing.T) {
 	}
 
 	first := connect(true)
+	exerciseSSHMachineStats(t, ctx, first)
 	if err := first.Bootstrap(ctx, bundle, "ssh-integration", func(s string) { t.Log(s) }); err != nil {
 		t.Fatal(err)
 	}

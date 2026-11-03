@@ -1,11 +1,12 @@
-import { ArrowRight, ArrowUpRight, Check, CircleAlert, Folder, KeyRound, LoaderCircle, Network, Plus, Power, Radio, RefreshCw, Server, Terminal as TerminalIcon, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, ArrowUpRight, Check, CircleAlert, Folder, Info, KeyRound, LoaderCircle, Network, Plus, Power, Radio, RefreshCw, Server, Terminal as TerminalIcon, Trash2 } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
 import { api, errorMessage, runtimePath } from "./api";
 import { InlineError } from "./Forms";
 import { HostStatus, SessionStatus } from "./Sidebar";
 import { Terminal } from "./LazyTerminal";
 import { canCreateSessions, localCoordinatorOnly } from "./runtimeCapabilities";
 import { TerminalWindowActions } from "./TerminalWindowActions";
+import { MachineStats } from "./MachineStats";
 import { RuntimeMaintenance } from "./RuntimeMaintenance";
 import { AgentModeBadge } from "./AgentMode";
 import { AgentTools } from "./AgentTools";
@@ -14,6 +15,7 @@ import { SessionExitActions } from "./SessionExitActions";
 import { SessionTitle } from "./SessionTitle";
 import { MaintenanceJobs, maintenanceActive } from "./MaintenanceJobs";
 import type { Harness, HarnessAction, Host, MaintenanceJob, RuntimeState, Session } from "./types";
+import "./SessionView.css";
 
 export { FleetOverview } from "./Fleet";
 
@@ -35,6 +37,7 @@ export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDis
   };
   return <div className="page-scroll"><div className="page-content host-page">
     <div className="page-eyebrow"><Server size={13} /> MACHINE</div><div className="page-heading"><div><div className="host-title-line"><h1>{host.name}</h1><HostStatus host={host} /></div><p className="mono">{host.id === "local" ? "Local runtime" : host.target} {host.id !== "local" && <span className="muted">· {host.port ? `port ${host.port}` : "SSH config defaults"}</span>}</p></div>{active ? <button className="button primary" disabled={!canStart} onClick={onNew}><Plus size={16} /> {coordinatorOnly ? "Open Mastermind" : "New session"}</button> : host.id === "local" ? null : host.status === "connecting" || host.status === "installing" ? <button className="button primary" onClick={onSetup}><TerminalIcon size={16} /> Open setup</button> : <button className="button primary" onClick={onConnect}><RefreshCw size={16} /> Reconnect</button>}</div>
+    <MachineStats host={host} />
     {!active && <div className={`host-connection-notice ${host.status === "error" ? "has-error" : ""}`}><Radio size={19} /><div><strong>{host.stage || "Machine disconnected"}</strong><p>{host.error || (host.status === "disconnected" ? "Reconnect to see current state and attach to your remote sessions." : host.stage === "Waiting for another host setup" ? "This machine will connect when another setup finishes. You can open its terminal while you wait." : "Relay is reconnecting. Open the setup terminal if SSH needs a password or host verification.")}</p></div>{host.status !== "disconnected" && <button className="text-button" onClick={onSetup}>View terminal <ArrowRight size={14} /></button>}</div>}
     {host.setupWarning && <div className="host-setup-warning" role="status"><CircleAlert size={16} /><div><strong>Agent coordination setup needs attention</strong><p>{host.setupWarning}</p><p>This does not stop your sessions. Runtime repair can retry setup.</p></div></div>}
     <InlineError error={runtime?.error ? `Could not refresh this machine: ${runtime.error}` : null} />
@@ -47,9 +50,11 @@ export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDis
   </div></div>;
 }
 
-export function SessionView({ host, session, runtime, onActivity, onDelete, onHost, onReviewed, onCreated, expanded = false, onExpand, onRenamed }: { host: Host; session: Session; runtime?: RuntimeState; onActivity: () => void; onDelete: () => void; onHost: () => void; onReviewed: () => void; onCreated: (session: Session) => void; expanded?: boolean; onExpand: () => void; onRenamed: (session: Session) => void }) {
+export function SessionView({ host, session, runtime, onActivity, onDelete, onHost, onReviewed, onCreated, expanded = false, onExpand, onRenamed, paneActions }: { host: Host; session: Session; runtime?: RuntimeState; onActivity: () => void; onDelete: () => void; onHost: () => void; onReviewed: () => void; onCreated: (session: Session) => void; expanded?: boolean; onExpand: () => void; onRenamed: (session: Session) => void; paneActions?: ReactNode }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const installed = session.purpose === "install" && session.status === "exited" && session.exitCode === 0;
   const maintained = (session.purpose === "update" || session.purpose === "repair") && session.status === "exited" && session.exitCode === 0;
   const harnessName = session.harness === "claude" ? "Claude Code" : "Codex";
@@ -59,7 +64,24 @@ export function SessionView({ host, session, runtime, onActivity, onDelete, onHo
     catch (error) { setError(errorMessage(error)); }
     finally { setPending(false); }
   };
-  return <div className="session-view"><div className="session-heading"><div><div className="session-location"><button onClick={onHost}>{host.name}</button><span>/</span><span>{session.workspace}</span></div><SessionTitle host={host} session={session} onSaved={onRenamed} /></div><SessionStatus session={session} /><TerminalWindowActions hostId={host.id} sessionId={session.id} expanded={expanded} onExpand={onExpand} /><button className="icon-button delete-session" title={session.status === "running" ? "End and remove session" : "Remove saved session"} aria-label={session.status === "running" ? "End and remove session" : "Remove saved session"} onClick={onDelete}><Trash2 size={17} /></button></div><div className="session-path"><Folder size={13} /><span>{session.cwd}</span><span className="session-harness">{session.harness === "shell" ? "Shell" : session.harness === "claude" ? "Claude Code" : "Codex"}</span><AgentModeBadge session={session} /></div>
+  return <div className={`session-view session-view-compact${detailsOpen ? " session-details-open" : ""}`}>
+    <header className="session-heading session-heading-compact">
+      <div className="session-heading-identity">
+        <SessionTitle host={host} session={session} onSaved={onRenamed} />
+        <button className="session-host-link" onClick={onHost} title={`Open machine: ${host.name}`}><Server size={12} /><span>{host.name}</span></button>
+      </div>
+      <div className="session-heading-controls">
+        <SessionStatus session={session} />
+        <button type="button" className="icon-button session-details-toggle" aria-label="Session details" title="Session details" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}><Info size={16} /></button>
+        <TerminalWindowActions hostId={host.id} sessionId={session.id} expanded={expanded} onExpand={onExpand} />
+        {paneActions && <div className="session-pane-actions">{paneActions}</div>}
+        <button className="icon-button delete-session" title={session.status === "running" ? "End and remove session" : "Remove saved session"} aria-label={session.status === "running" ? "End and remove session" : "Remove saved session"} onClick={onDelete}><Trash2 size={16} /></button>
+      </div>
+    </header>
+    <section className="session-details-panel" id={detailsId} aria-label="Session details" hidden={!detailsOpen}>
+      <div className="session-detail-context"><span>{session.workspace || "Workspace"}</span><span>{session.harness === "shell" ? "Shell" : harnessName}</span><AgentModeBadge session={session} /></div>
+      <p className="session-detail-path"><Folder size={13} /><span>{session.cwd}</span></p>
+    </section>
     <SessionApprovalNotice host={host} session={session} runtime={runtime} onActivity={onActivity} />
     {session.attention && <div className="terminal-banner attention-banner"><span>{session.attention.kind === "completed" ? "The agent reported completion." : session.attention.kind === "permission" ? "The agent reported a permission request. Review it in the terminal." : "The agent sent a notification. Review its terminal output."} <small>{session.attention.source === "claude-hook" ? "Claude hook" : session.attention.source === "codex-hook" ? "Codex hook" : "Codex notification"}</small></span><button onClick={onReviewed} disabled={host.status !== "online"}>Mark reviewed <Check size={13} /></button></div>}
     {host.status !== "online" && <div className="terminal-banner">This machine is {host.status}. Reconnect from the machine page to resume this terminal.<button onClick={onHost}>Open machine <ArrowRight size={13} /></button></div>}

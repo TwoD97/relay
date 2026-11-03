@@ -26,6 +26,18 @@ API namespace and data directories belong to Relay.
   Lookup uses the existing authenticated SSH transport and never restarts or
   upgrades its runtime. Requests are cancellable, time/output/concurrency bounded,
   and a cancelled lookup does not close the shared SSH connection.
+- `GET /api/hosts/{id}/stats`: read-only `{sampledAt,platform,cpu,memory,storage,warnings}`.
+  CPU contains nullable `usagePercent`, `logicalCpus`, and `intervalSeconds`, plus
+  an optional `error`. Memory is nullable; memory and each storage entry contain
+  `totalBytes`, `usedBytes`, and `availableBytes`. Storage entries additionally
+  identify `scope` (`root|system|home`) and `path`; locations may share a filesystem
+  and must not be summed. CPU usage needs two valid cumulative samples no more
+  than 30 seconds apart. Collection uses native local counters or the existing
+  remote SSH connection, without a runtime API dependency. Reads are cached for
+  two seconds per connection identity, coalesced, limited to four concurrent
+  collectors, and have a six-second deadline. Query parameters are rejected.
+  Partial collection returns warnings and unavailable fields; disconnected hosts
+  return 503. The UI polls every five seconds only while its overview is visible.
 - `/api/hosts/{id}/runtime/*`: proxy to daemon `/api/*`, HTTP and WebSocket.
 - `GET /api/bootstrap`: `{csrf,version}`. Mutations use `X-Relay-CSRF`.
 - `GET /auth?token=...`: consumes startup token into HttpOnly SameSite=Strict cookie;

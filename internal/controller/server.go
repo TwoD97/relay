@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/TwoD97/relay/internal/localagent"
+	"github.com/TwoD97/relay/internal/machinestats"
 	"github.com/TwoD97/relay/internal/transport"
 )
 
@@ -36,6 +37,10 @@ type link struct {
 }
 
 type Server struct {
+	stats                           map[string]*statsEntry
+	statsSlots                      chan struct{}
+	statsTimeout                    time.Duration
+	statsCollector                  func(context.Context, *transport.Connection) (machinestats.Sample, error)
 	imageSlots                      chan struct{}
 	localAgentConnecting            bool
 	localAgentError                 string
@@ -90,6 +95,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{imageSlots: make(chan struct{}, 2), localAgentError: cfg.LocalAgentError, config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
+	s.stats, s.statsSlots, s.statsTimeout, s.statsCollector = map[string]*statsEntry{}, make(chan struct{}, 4), 6*time.Second, collectMachineStats
 	s.maintenance = maintenance
 	s.mastermind, s.mastermindWake = mastermind, make(chan struct{}, 1)
 	_ = s.initializeWorkspace()
@@ -139,6 +145,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("DELETE /api/hosts/{id}", s.forgetHost)
 	mux.HandleFunc("GET /api/hosts/{id}/setup-terminal", s.setupTerminal)
 	mux.HandleFunc("GET /api/hosts/{id}/directories", s.directories)
+	mux.HandleFunc("GET /api/hosts/{id}/stats", s.machineStats)
 	mux.HandleFunc("POST /api/hosts/{id}/sessions/{session}/images", s.uploadImage)
 	mux.HandleFunc("/api/hosts/{id}/runtime/{route...}", s.runtimeProxy)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "Unknown API endpoint") })

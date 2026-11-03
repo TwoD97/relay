@@ -546,7 +546,7 @@ function Test-LocalMastermindRendering {
     # model call. It must publish through CAS and active-launch authorization.
     $workspace=Invoke-FixtureAgentCLI @('workspace','show')
     $html=Join-Path $script:StateDirectory 'mastermind-fixture-plan.html'
-    [IO.File]::WriteAllText($html,'<h1>LOCAL MASTER PLAN</h1><p>Native fixture evidence.</p><script>window.parent.FIXTURE_ESCAPE=true</script>',[Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($html,'<main class="native-page-shell" style="width:420px;max-width:420px;margin-inline:auto"><h1>LOCAL MASTER PLAN</h1><p>Native fixture evidence.</p><div class="native-page-card" style="width:120px;max-width:120px">Fixed nested card</div></main><script>window.parent.FIXTURE_ESCAPE=true</script>',[Text.UTF8Encoding]::new($false))
     $created=Invoke-FixtureAgentCLI @('workspace','pages','create','--revision',[string]$workspace.revision,'--title','Native fixture plan','--html-file',$html)
     $task=Invoke-FixtureAgentCLI @('workspace','tasks','create','--revision',[string]$created.workspace.revision,'--title','Verify local coordinator','--status','doing','--page',$created.page.id,'--host','local','--session',$session)
     Select-MastermindView 'Pages'
@@ -557,6 +557,7 @@ function Test-LocalMastermindRendering {
     try {
         [void](Wait-Until { Execute-JS 'const heading=document.querySelector("h1");if(!heading||heading.textContent!=="LOCAL MASTER PLAN")return false;const r=heading.getBoundingClientRect(),style=getComputedStyle(heading);return r.width>0&&r.height>0&&style.visibility!=="hidden"&&style.display!=="none";' } 'actual sandboxed document heading renders')
     } finally { [void](Session-WD POST '/frame' @{id=$null}) }
+    Test-NativeCanvasLayout $created.page.id $task.workspace.revision ([IO.File]::ReadAllText($html))
     Save-Screenshot 'native-local-mastermind-pages.png'
     Select-MastermindView 'Tasks'
     [void](Wait-Until { Execute-JS 'const task=document.querySelector("article[aria-label=\"Verify local coordinator\"]");return !!task&&task.querySelector("select")?.value==="doing";' } 'agent-authored native task board')
@@ -596,6 +597,41 @@ function Test-LocalMastermindRendering {
     Assert-True ((API-JSON '/api/mastermind/workspace').revision -eq $task.workspace.revision) 'Reopening lost authored pages or tasks'
     Save-Screenshot 'native-local-mastermind-reopened.png'
     Write-Host 'PASS: local ConPTY Mastermind, private CLI canvas/tasks, sandbox, independent native window, lease and close/reopen persistence; no provider account or inference used'
+}
+
+function Read-CanvasWidths([bool]$Fitted = $false) {
+    $frame=Find-Element 'css selector' '.canvas-document iframe'
+    [void](Session-WD POST '/frame' @{id=@{'element-6066-11e4-a52e-4f735466cecf'=$frame}})
+    try {
+        return Wait-Until { Execute-JS 'const shell=document.querySelector(".native-page-shell"),card=document.querySelector(".native-page-card");if(!shell||!card)return false;const width=shell.getBoundingClientRect().width;if(arguments[0]?Math.abs(width-(innerWidth-32))>=2:Math.abs(width-420)>=1)return false;return {shell:width,card:card.getBoundingClientRect().width,viewport:innerWidth};' @($Fitted) } 'sandbox document paints its owned layout fixture'
+    } finally { [void](Session-WD POST '/frame' @{id=$null}) }
+}
+
+function Test-NativeCanvasLayout([string]$PageID, [int]$Revision, [string]$OriginalHTML) {
+    # Select the explicit page identity before expanding; its document must stay
+    # mounted on route/layout changes. Fitting is an explicit preview operation.
+    Click-Selector ('#canvas-tab-'+$PageID)
+    [void](Wait-Until { Execute-JS 'return location.hash.includes(arguments[0]);' @($PageID) } 'explicit page route')
+    $before=Read-CanvasWidths
+    Assert-True ([Math]::Abs($before.shell-420) -lt 1 -and [Math]::Abs($before.card-120) -lt 1) 'Original authored page widths changed before opting in'
+    [void](Execute-JS 'window.__relayNativeCanvas=document.querySelector(".canvas-document iframe");return true;')
+    Click-Selector '[aria-label="Expand page to full window"]'
+    [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe"),r=frame?.getBoundingClientRect();return frame===window.__relayNativeCanvas&&location.hash.endsWith(arguments[0]+"/window")&&r.width>=innerWidth-30&&r.height>=innerHeight-110&&r.top<100&&!document.querySelector(".mastermind-summary")&&getComputedStyle(document.querySelector(".workspace-page-navigation")).display==="none";' @($PageID) } 'expanded canvas keeps the same iframe and fills its native content window')
+    Click-Selector '[aria-label="Fit page width"]'
+    [void](Wait-Until { Execute-JS 'return document.querySelector("[aria-label=\"Fit page width\"]")?.getAttribute("aria-pressed")==="true";' } 'explicit page width fitting')
+    $fit=Read-CanvasWidths $true
+    Assert-True ($fit.shell -gt 420 -and [Math]::Abs($fit.shell-($fit.viewport-32)) -lt 2) 'Fit width did not expand the sole outer document wrapper'
+    Assert-True ([Math]::Abs($fit.card-120) -lt 1) 'Fit width changed a nested card layout'
+    Assert-True (Execute-JS 'const frame=document.querySelector(".canvas-document iframe");return frame.getAttribute("sandbox")===""&&frame.srcdoc.includes("script-src "+String.fromCharCode(39)+"none"+String.fromCharCode(39))&&!window.FIXTURE_ESCAPE;') 'Fitting changed the canvas sandbox policy'
+    $saved=API-JSON "/api/mastermind/workspace/pages/$PageID"
+    Assert-True ($saved.html -ceq $OriginalHTML -and (API-JSON '/api/mastermind/workspace').revision -eq $Revision) 'Preview layout changed saved page HTML or workspace revision'
+    Save-Screenshot 'native-page-expanded-fit.png'
+    Click-Selector '[aria-label="Fit page width"]'
+    $restored=Read-CanvasWidths
+    Assert-True ([Math]::Abs($restored.shell-420) -lt 1 -and [Math]::Abs($restored.card-120) -lt 1) 'Turning Fit off did not restore the original authored widths'
+    Click-Selector '[aria-label="Restore page layout"]'
+    [void](Wait-Until { Execute-JS 'return !location.hash.endsWith("/window")&&document.querySelector(".canvas-document iframe")===window.__relayNativeCanvas&&getComputedStyle(document.querySelector(".workspace-page-navigation")).display!=="none";' } 'restoring page layout preserves the selected document')
+    Write-Host 'PASS: native canvas full-window layout keeps its iframe; explicit Fit widens only outer content and preserves nested cards, sandbox and saved HTML'
 }
 
 function Select-MastermindView([string]$Section) {
@@ -821,6 +857,116 @@ return now-window.__relayTestGeometryReady.since>=300?result:false;
     }
     $records | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $script:Artifacts 'native-terminal-geometry.json') -Encoding UTF8
     Write-Host 'PASS: native terminal screen fits the viewport and real remote stty dimensions match after every owned-window resize'
+}
+
+function Test-MachineResources {
+    # Only the newly provisioned disposable SSH host is selected. This does not
+    # inspect provider credentials, invoke a model, or touch personal profiles.
+    [void](Wait-Until { Execute-JS 'return document.querySelectorAll(".machine-stats .machine-stat-card").length===3;' } 'CPU, RAM and storage cards appear for the owned SSH host')
+    [void](Wait-Until { Execute-JS 'const cards=[...document.querySelectorAll(".machine-stats .machine-stat-card")];return /^\d+(?:[.,]\d+)?%$/.test(cards[0]?.querySelector("strong")?.textContent||"")&&cards.slice(1).every(card=>/\d/.test(card.querySelector("strong")?.textContent||""))&&!!document.querySelector(".machine-stats time");' } 'two real read-only CPU samples and current memory/storage render' 30)
+    $result=API-JSON "/api/hosts/$script:remoteHost/stats"
+    Assert-True ($result.platform -eq 'linux' -and $null -ne $result.cpu.usagePercent -and $result.cpu.usagePercent -ge 0 -and $result.cpu.usagePercent -le 100) 'Disposable Linux CPU sample is invalid'
+    Assert-True ($result.memory.totalBytes -gt 0 -and $result.memory.usedBytes -ge 0 -and $result.memory.availableBytes -le $result.memory.totalBytes) 'Disposable Linux memory sample is invalid'
+    Assert-True (@($result.storage).Count -gt 0) 'Disposable Linux storage sample is missing'
+    Assert-True (Execute-JS 'return !document.querySelector(".machine-stats-error")&&!document.querySelector(".machine-stats-stale");') 'Fresh native resource cards are shown as failed or stale'
+    Click-Selector '[aria-label="Refresh machine resources"]'
+    [void](Wait-Until { Execute-JS 'return !!document.querySelector("[aria-label=\"Refresh machine resources\"]:not(:disabled)")&&!document.querySelector(".machine-stats-error");' } 'explicit machine resource refresh succeeds')
+    Save-NativeWindow $script:NativeIdentity 'native-machine-resources.png'
+    # Sanitized proof excludes filesystem paths and any terminal transcript.
+    @{platform=$result.platform;sampledAt=$result.sampledAt;cpuPercent=$result.cpu.usagePercent;logicalCPUs=$result.cpu.logicalCpus;memoryTotalBytes=$result.memory.totalBytes;storageLocations=@($result.storage).Count}|ConvertTo-Json|Set-Content -Encoding UTF8 -LiteralPath (Join-Path $script:Artifacts 'native-machine-resources.json')
+    Write-Host 'PASS: native machine overview renders real CPU deltas, RAM and filesystem cards from the disposable SSH host'
+}
+
+function Pane-JS([string]$Session, [string]$Source) {
+    return Execute-JS ('const pane=[...document.querySelectorAll(".terminal-pane")].find(item=>item.dataset.paneSession===arguments[0]);if(!pane)return false;' + $Source) @($Session)
+}
+
+function Send-PaneTerminal([string]$Session, [string]$Text) {
+    Assert-True ($Session -match '^[a-zA-Z0-9_-]+$') 'Unexpected fixture session identifier'
+    $element=Find-Element 'css selector' ('.terminal-pane[data-pane-session="'+$Session+'"] textarea.xterm-helper-textarea')
+    [void](Session-WD POST "/element/$element/value" @{text=($Text+[char]0xE007)})
+}
+
+function Test-TerminalPanes([string]$OriginalSession) {
+    $owned=@();$all=@();$records=@()
+    try {
+        $original=@(API-JSON "/api/hosts/$script:remoteHost/runtime/sessions" | Where-Object {$_.id -eq $OriginalSession})
+        Assert-True ($original.Count -eq 1) 'Original disposable session unavailable for pane gate'
+        $all+= $original[0]
+        foreach($index in 2..4) {
+            $result=API "/api/hosts/$script:remoteHost/runtime/sessions" POST @{harness='shell';cwd=$original[0].cwd;workspace='Windows pane smoke';title="Windows native pane $index"}
+            Assert-True ($result.Status -eq 201) 'Could not create an owned fixture pane session'
+            $session=$result.Body|ConvertFrom-Json
+            $owned+=$session;$all+=$session
+            Click-Selector '.terminal-pane [aria-label="Add terminal pane"]'
+            $label="$($session.title) on Windows SSH fixture"
+            [void](Wait-Until { Execute-JS 'return [...document.querySelectorAll("[role=dialog] button")].some(button=>button.getAttribute("aria-label")===arguments[0]);' @($label) } 'owned pane appears in session picker')
+            $button=Find-Element xpath "//*[@role='dialog']//button[@aria-label='$label']"
+            [void](Session-WD POST "/element/$button/click" @{})
+            [void](Wait-Until { Pane-JS $session.id 'return !!pane.querySelector(".xterm");' } 'new real PTY pane attaches')
+        }
+        Assert-True (Execute-JS 'return document.querySelectorAll(".terminal-pane").length===4 && [...document.querySelectorAll("[aria-label=\"Add terminal pane\"]")].every(button=>button.disabled);') 'Four-pane limit is not enforced'
+        [void](Execute-JS 'window.__relayNativePaneDOM=[...document.querySelectorAll(".terminal-pane .xterm")];')
+        $markers=@()
+        foreach($session in $all) {
+            $selector='.terminal-pane[data-pane-session="'+$session.id+'"]'
+            if (-not (Pane-JS $session.id 'return pane.textContent.includes("Controlling");')) {
+                Click-Selector ($selector+' .terminal-canvas')
+                [void](Wait-Until { Pane-JS $session.id 'return pane.textContent.includes("Controlling");' } 'scoped pane obtains writer control')
+            }
+            [void](Pane-JS $session.id 'delete pane.__relayGeometry;return true;')
+            $geometry=Wait-Until {
+                Pane-JS $session.id @'
+const shell=pane.querySelector('.terminal-shell'),canvas=shell?.querySelector('.terminal-canvas'),mount=shell?.querySelector('.terminal-mount'),screen=shell?.querySelector('.xterm-screen');
+if(!canvas||!mount||!screen)return false;
+const cols=Number(shell.dataset.terminalCols),rows=Number(shell.dataset.terminalRows),c=canvas.getBoundingClientRect(),m=mount.getBoundingClientRect(),s=screen.getBoundingClientRect(),style=getComputedStyle(canvas);
+const left=c.left+canvas.clientLeft+parseFloat(style.paddingLeft),top=c.top+canvas.clientTop+parseFloat(style.paddingTop),right=c.left+canvas.clientLeft+canvas.clientWidth-parseFloat(style.paddingRight),bottom=c.top+canvas.clientTop+canvas.clientHeight-parseFloat(style.paddingBottom);
+if(!cols||!rows||!s.width||!s.height||m.left<left-1||m.top<top-1||m.right>right+1||m.bottom>bottom+1||Math.abs(m.width-(right-left))>1||Math.abs(m.height-(bottom-top))>1||s.right>right+1||s.bottom>bottom+1)return false;
+const result={cols,rows,width:c.width,height:c.height},key=JSON.stringify(result),old=pane.__relayGeometry,now=performance.now();
+pane.__relayGeometry={key,since:old?.key===key?old.since:now};return now-pane.__relayGeometry.since>=300?result:false;
+'@
+            } 'each owned pane receives stable geometry fitting its own canvas'
+            $marker='RELAY_PANE_'+[Guid]::NewGuid().ToString('N').Substring(0,12)
+            $markers+=$marker
+            Send-PaneTerminal $session.id ("printf '{0} '; stty size" -f $marker)
+            $expected="$marker $($geometry.rows) $($geometry.cols)"
+            [void](Wait-Until { $history=API "/api/hosts/$script:remoteHost/runtime/sessions/$($session.id)/history";return $history.Status -eq 200 -and $history.Body.Contains($expected) } 'input reaches only the chosen real PTY with matching dimensions')
+            $records+=@{sessionId=$session.id;createdAt=$session.createdAt;geometry=$geometry;marker=$marker}
+        }
+        for($index=0;$index -lt $all.Count;$index++) {
+            $history=API "/api/hosts/$script:remoteHost/runtime/sessions/$($all[$index].id)/history"
+            Assert-True ($history.Status -eq 200 -and $history.Body.Contains($markers[$index])) 'Pane command output is missing from its own PTY'
+            for($other=0;$other -lt $markers.Count;$other++) {
+                if($other -ne $index){Assert-True (-not $history.Body.Contains($markers[$other])) 'Input was broadcast into another real terminal'}
+            }
+        }
+        Save-NativeWindow $script:NativeIdentity 'native-four-panes.png'
+        $first='.terminal-pane[data-pane-session="'+$OriginalSession+'"]'
+        Click-Selector ($first+' [aria-label="Expand terminal to full window"]')
+        [void](Wait-Until { Execute-JS 'return document.querySelectorAll(".terminal-pane[hidden][inert]").length===3 && window.__relayNativePaneDOM.every(node=>node.isConnected);' } 'zoom hides other panes while preserving all terminal elements')
+        Click-Selector ($first+' [aria-label="Restore workspace layout"]')
+        [void](Wait-Until { Execute-JS 'return document.querySelectorAll(".terminal-pane[hidden]").length===0 && window.__relayNativePaneDOM.every(node=>node.isConnected);' } 'restore reuses all four terminal elements')
+        $last=$all[3]
+        Click-Selector ('.terminal-pane[data-pane-session="'+$last.id+'"] [aria-label="Close pane"]')
+        [void](Wait-Until { Execute-JS 'return document.querySelectorAll(".terminal-pane").length===3;' } 'close removes only the selected pane')
+        $saved=@(API-JSON "/api/hosts/$script:remoteHost/runtime/sessions")
+        foreach($session in $all) {
+            $exact=@($saved|Where-Object {$_.id -eq $session.id -and $_.createdAt -eq $session.createdAt -and $_.status -eq 'running'})
+            Assert-True ($exact.Count -eq 1) 'Closing a pane removed, restarted or stopped its PTY'
+        }
+        [void](Wait-Until {
+            $response=API "/api/hosts/$script:remoteHost/runtime/sessions/$($last.id)/input" POST @{data="`r"}
+            return $response.Status -eq 204
+        } 'closed pane releases its writer lease without ending the session')
+        Assert-True ((API "/api/hosts/$script:remoteHost/runtime/sessions/$OriginalSession/input" POST @{data="`r"}).Status -eq 409) 'Closing another pane released the original pane writer lease'
+        $records|ConvertTo-Json -Depth 6|Set-Content -Encoding UTF8 -LiteralPath (Join-Path $script:Artifacts 'native-terminal-panes.json')
+        Write-Host 'PASS: four real Windows-viewed SSH PTYs isolate input and dimensions; zoom preserves terminal elements; pane close retains exact running sessions'
+    } finally {
+        # Detach extra viewers first. Only sessions created above may be deleted.
+        if($script:SessionID){try{[void](Execute-JS 'location.hash=arguments[0];return true;' @("#host/$script:remoteHost/session/$OriginalSession"))}catch{}}
+        foreach($session in $owned){try{[void](API "/api/hosts/$script:remoteHost/runtime/sessions/$($session.id)" DELETE)}catch{}}
+        if($script:SessionID){[void](Wait-Until { Execute-JS 'return document.querySelectorAll(".terminal-pane").length===1;' } 'return to original native terminal')}
+    }
 }
 
 function Click-Selector([string]$Selector) {
@@ -1339,6 +1485,7 @@ try {
     [void](Wait-Until { Body-Contains 'Open machine' } 'remote setup completion')
     Click-Button 'Open machine'
     [void](Wait-Until { Body-Contains 'New session' } 'connected remote workspace')
+    if ($RenderingOnly) { Test-MachineResources }
     Click-Button 'New session'
     Click-Selector '[aria-label="Browse folders"]'
     [void](Wait-Until { Execute-JS 'return !!document.querySelector("[aria-label=\"Open folder Relay folder smoke\"]");' } 'remote home directory browser')
@@ -1369,7 +1516,7 @@ try {
     Claim-Terminal
     Assert-True ((API $inputPath POST @{ data="printf 'RELAY_DENIED_INPUT\n'`r" }).Status -eq 409) 'Second client bypassed native writer lease'
     Test-DirectTerminalKeys $remoteSession
-    if ($RenderingOnly) { Test-TerminalResizeRendering }
+    if ($RenderingOnly) { Test-TerminalResizeRendering; Test-TerminalPanes $remoteSession }
     if ($Clipboard) { Test-TerminalClipboard }
     else { Write-Host 'SKIP: real Windows clipboard gate requires -Clipboard and a disposable account clipboard' }
     Send-Terminal "printf 'RELAY_%s\n' 'WINDOWS_NATIVE_OK'"

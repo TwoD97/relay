@@ -24,7 +24,8 @@ async function onlyView(page: Page, view: "Overview" | "Pages" | "Tasks" | "Term
   await expect(page.getByRole("region", { name: "Mastermind pages", exact: true })).toHaveCount(view === "Pages" ? 1 : 0);
   await expect(page.getByRole("region", { name: "Mastermind tasks", exact: true })).toHaveCount(view === "Tasks" ? 1 : 0);
   await expect(page.getByRole("region", { name: "Mastermind terminal", exact: true })).toHaveCount(view === "Terminal" ? 1 : 0);
-  await expect(page.locator(".mastermind")).toHaveAttribute("data-presentation", view === "Terminal" ? "terminal" : "summary");
+  if (view === "Pages") await expect(page.locator(".mastermind")).toHaveCount(0);
+  else await expect(page.locator(".mastermind")).toHaveAttribute("data-presentation", view === "Terminal" ? "terminal" : "summary");
   if (view !== "Pages") await expect(page.locator("iframe")).toHaveCount(0);
   if (view !== "Terminal") await expect(page.locator(".xterm")).toHaveCount(0);
 }

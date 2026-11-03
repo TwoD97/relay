@@ -279,6 +279,7 @@ func (s *Server) forgetHost(w http.ResponseWriter, r *http.Request) {
 	}
 	l := s.links[id]
 	delete(s.links, id)
+	delete(s.stats, id)
 	s.mu.Unlock()
 	if l != nil {
 		if l.cancel != nil {

@@ -50,6 +50,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const claimPending = useRef(false);
   const claimIntent = useRef(false);
   const controlReady = useRef(false);
+  const scrollingPointer = useRef(false);
 
   useEffect(() => {
     if (!container.current) return;
@@ -79,6 +80,34 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     terminal.current = term;
     term.textarea?.addEventListener("beforeinput", userInput);
     term.textarea?.addEventListener("compositionstart", userInput);
+    const finishScrollingPointer = () => { scrollingPointer.current = false; };
+    window.addEventListener("pointerup", finishScrollingPointer, true);
+    window.addEventListener("pointercancel", finishScrollingPointer, true);
+    const canvas = container.current.parentElement;
+    const observerWheel = (event: WheelEvent) => {
+      if (!canvas || event.ctrlKey || event.metaKey || (enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current))) return;
+      // Full-screen applications consume wheel events for mouse reporting or
+      // cursor-key input. A read-only viewer cannot send either. When its
+      // canonical screen is larger than the pane, leave the gesture to the
+      // native outer viewport instead of letting xterm swallow it.
+      if (term.buffer.active.type !== "alternate" && term.modes.mouseTrackingMode === "none") return;
+      const vertical = event.deltaY < 0 ? canvas.scrollTop > 0 : event.deltaY > 0 && canvas.scrollTop + canvas.clientHeight < canvas.scrollHeight;
+      const horizontal = event.deltaX < 0 ? canvas.scrollLeft > 0 : event.deltaX > 0 && canvas.scrollLeft + canvas.clientWidth < canvas.scrollWidth;
+      if (vertical || horizontal) event.stopPropagation();
+    };
+    canvas?.addEventListener("wheel", observerWheel, { capture: true, passive: true });
+    const resizeScreen = (cols: number, rows: number) => {
+      if (term.cols === cols && term.rows === rows) return;
+      const buffer = term.buffer.active;
+      // A control claim can change the shared dimensions. Keep the historical
+      // line the user was reading anchored through xterm's normal reflow.
+      const anchor = buffer.type === "normal" && buffer.viewportY < buffer.baseY
+        ? term.registerMarker(buffer.viewportY - buffer.baseY - buffer.cursorY) : undefined;
+      try {
+        term.resize(cols, rows);
+        if (anchor && !anchor.isDisposed) term.scrollToLine(anchor.line);
+      } finally { anchor?.dispose(); }
+    };
     const copyText = () => {
       const text = term.getSelection();
       if (!text) return;
@@ -258,7 +287,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       // Shared terminals follow the runtime's ordered acknowledgement. A local
       // resize here would interpret in-flight output at the wrong dimensions,
       // and would diverge if the PTY rejected its window-size change.
-      if (!exclusive) term.resize(cols, rows);
+      if (!exclusive) resizeScreen(cols, rows);
       const ws = socket.current;
       const dimensions = `${cols}x${rows}`;
       if (ws?.readyState === WebSocket.OPEN && enabledRef.current && !finishedRef.current && (!exclusive || ownerRef.current) && lastResize !== dimensions) {
@@ -324,7 +353,6 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
           if (ws.readyState === WebSocket.OPEN) {
             setLink("connected");
             resize();
-            if (!exclusive) term.focus();
           }
         });
       };
@@ -365,7 +393,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
                 setOwner(owns);
                 setAvailable(message.available === true);
                 setControlReason(message.reason || "");
-                if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols! >= 1 && message.cols! <= 1000 && message.rows! >= 1 && message.rows! <= 1000) term.resize(message.cols!, message.rows!);
+                if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols! >= 1 && message.cols! <= 1000 && message.rows! >= 1 && message.rows! <= 1000) resizeScreen(message.cols!, message.rows!);
                 if (owns) resize();
                 // A deliberate click during initial replay can precede the
                 // first availability frame. Retain that intent, never text.
@@ -416,6 +444,10 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       container.current?.removeEventListener("paste", pasteEvent, true);
       term.textarea?.removeEventListener("blur", invalidateFocus);
       window.removeEventListener("blur", invalidateFocus);
+      window.removeEventListener("pointerup", finishScrollingPointer, true);
+      window.removeEventListener("pointercancel", finishScrollingPointer, true);
+      canvas?.removeEventListener("wheel", observerWheel, true);
+      scrollingPointer.current = false;
       if (imagePicker.current) imagePicker.current.onchange = null;
       chooseImage.current = () => {};
       invalidateInput.current = () => {};
@@ -498,7 +530,17 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     </div>
     <input ref={imagePicker} type="file" accept="image/png,image/jpeg" hidden aria-label="Choose terminal image" />
     {imageNote && <div className="terminal-image-notice" role="status">{imageNote}</div>}
-    <div className="terminal-canvas" role="region" aria-label={label} onFocus={claim} onBlur={() => { claimIntent.current = false; }} onPointerDown={(event) => { if (event.button === 0 && !finished) { claim(); terminal.current?.focus(); } }}><div ref={container} className="terminal-mount" /></div>
+    <div className="terminal-canvas" role="region" aria-label={label}
+      onPointerDownCapture={(event) => {
+        const canvas = event.currentTarget, box = canvas.getBoundingClientRect();
+        const target = event.target instanceof Element ? event.target : undefined;
+        const nativeGutter = event.clientX >= box.left + canvas.clientLeft + canvas.clientWidth || event.clientY >= box.top + canvas.clientTop + canvas.clientHeight;
+        scrollingPointer.current = nativeGutter || !!target?.closest(".xterm-scrollable-element > .scrollbar, .xterm-overview-ruler");
+        if (scrollingPointer.current) claimIntent.current = false;
+      }}
+      onFocus={(event) => { if (!scrollingPointer.current && event.nativeEvent.target === terminal.current?.textarea) claim(); }}
+      onBlur={() => { claimIntent.current = false; }}
+      onPointerDown={(event) => { if (event.button === 0 && !finished && !scrollingPointer.current) { claim(); terminal.current?.focus(); } }}><div ref={container} className="terminal-mount" /></div>
     <div className="terminal-display-toolbar">
       <span className="terminal-dimensions" role="status" aria-label="Terminal dimensions" title="Columns × rows of this terminal">{geometry.cols} × {geometry.rows}</span>
       <div className="terminal-font-controls" role="group" aria-label="Terminal font size">

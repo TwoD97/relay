@@ -5,7 +5,16 @@ export const local: Host = { id: "local", name: "This computer", target: "local"
 export const remote: Host = { id: "dev", name: "Development", target: "dev@example.test", port: 22, status: "online", stage: "Connected", createdAt: "2026-10-07T08:00:00Z" };
 export const work: Session = { id: "session-1", title: "Build the dashboard", workspace: "Relay", cwd: "/home/dev/projects/relay", harness: "shell", status: "running", createdAt: "2026-10-07T08:00:00Z", updatedAt: "2026-10-07T08:00:00Z" };
 
-export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; workspace?: MastermindWorkspaceState; pages?: MastermindPage[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; terminalGeometry?: { cols: number; rows: number }; deferTerminalControl?: boolean; deferTerminalClaim?: boolean; deferTerminalResize?: boolean } = {}) {
+type TerminalFixture = {
+  occupied?: boolean;
+  output?: string;
+  geometry?: { cols: number; rows: number };
+  deferControl?: boolean;
+  deferClaim?: boolean;
+  deferResize?: boolean;
+};
+
+export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?: Record<string, Session[]>; sessionModes?: Partial<Record<HarnessId, AgentMode[]>>; maintenanceJobs?: MaintenanceJob[]; mastermind?: MastermindState; workspace?: MastermindWorkspaceState; pages?: MastermindPage[]; approvals?: Record<string, Approval[]>; observers?: Record<string, ObserverState>; unauthorized?: boolean; hangHarnesses?: string[]; failHosts?: string[]; replayQueriesBeforeClaim?: boolean; autoReconnect?: boolean; deferSetupAttachments?: number; legacyRuntime?: boolean; terminalOccupied?: boolean; terminalOutput?: string; terminalGeometry?: { cols: number; rows: number }; deferTerminalControl?: boolean; deferTerminalClaim?: boolean; deferTerminalResize?: boolean; terminalSessions?: Record<string, TerminalFixture> } = {}) {
   const hosts = options.hosts ?? [structuredClone(local), structuredClone(remote)];
   const sessions = options.sessions ?? { local: [], dev: [structuredClone(work)] };
   const maintenanceJobs = options.maintenanceJobs ?? [];
@@ -20,9 +29,31 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
   const directoryRequests: { host: string; path: string; prefix: string; hidden: boolean }[] = [];
   const reconnectRequests: { csrf: string | undefined }[] = [];
   const sessionRequests: Record<string, number> = {};
-  const terminals = new Set<{ ws: WebSocketRoute; owner: boolean }>();
-  let terminalOccupied = options.terminalOccupied ?? false;
-  let terminalGeometry = options.terminalGeometry ?? { cols: 120, rows: 32 };
+  const terminalDefaults = {
+    occupied: options.terminalOccupied ?? false,
+    output: options.terminalOutput ?? "\u001b[32mConnected to Relay\u001b[0m\r\n$ ",
+    geometry: options.terminalGeometry ?? { cols: 120, rows: 32 },
+    deferControl: options.deferTerminalControl ?? false,
+    deferClaim: options.deferTerminalClaim ?? false,
+    deferResize: options.deferTerminalResize ?? false,
+  };
+  type TerminalState = typeof terminalDefaults;
+  const terminalStates = new Map<string, TerminalState>();
+  const terminalState = (path: string) => {
+    let state = terminalStates.get(path);
+    if (!state) {
+      state = { ...terminalDefaults, ...options.terminalSessions?.[path] };
+      terminalStates.set(path, state);
+    }
+    return state;
+  };
+  const terminals = new Set<{ ws: WebSocketRoute; owner: boolean; path: string; state: TerminalState }>();
+  const detachments: string[] = [];
+  const sendControl = (path: string, reason?: string) => {
+    const state = terminalState(path);
+    const occupied = state.occupied || [...terminals].some((terminal) => terminal.path === path && terminal.owner);
+    for (const terminal of terminals) if (terminal.path === path) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !occupied, ...state.geometry, reason }));
+  };
   let deferredSetup = options.deferSetupAttachments ?? 0;
   let stateRequests = 0;
   let authorized = !options.unauthorized;
@@ -156,6 +187,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       observer.summaries = [...observer.summaries.filter((item) => item !== old), { sessionId: session.id, sessionCreatedAt: session.createdAt, provider: "claude", model: observer.config.model, summary: "", steps: [], nextSteps: [], blockers: [], sourceStatus: session.status, stale: false, ...old, status: "queued", updatedAt: new Date().toISOString() }];
       return json(observer, 202);
     }
+    if (suffix === "stats") return json({ sampledAt: new Date().toISOString(), platform: "linux", cpu: { usagePercent: 12, logicalCpus: 4, intervalSeconds: 5 }, memory: { totalBytes: 8589934592, usedBytes: 2147483648, availableBytes: 6442450944 }, storage: [{ scope: "root", path: "/", totalBytes: 107374182400, usedBytes: 42949672960, availableBytes: 64424509440 }], warnings: [] });
     if (suffix === "runtime/health") return json({ protocol: 1, version: "fixture", platform: "linux", capabilities: { mastermindV1: !options.legacyRuntime, localMastermindV1: true } });
     if (suffix === "runtime/harnesses") {
       if (options.hangHarnesses?.includes(hostId)) return;
@@ -187,32 +219,38 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     attachments.push(path);
     const setup = path.endsWith("setup-terminal");
     if (setup && deferredSetup > 0) { deferredSetup--; ws.close({ code: 1013, reason: "Waiting for SSH setup" }); return; }
-    const terminal = { ws, owner: false };
+    const state = terminalState(path);
+    const terminal = { ws, owner: false, path, state };
     if (!setup) {
       terminals.add(terminal);
-      ws.onClose(() => terminals.delete(terminal));
-      if (!options.deferTerminalControl) ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, ...terminalGeometry }));
+      ws.onClose(() => { if (terminals.delete(terminal)) { detachments.push(path); sendControl(path); } });
+      if (!state.deferControl) sendControl(path);
     }
-    ws.send(Buffer.from(setup ? "SSH host fingerprint: SHA256:fixture\r\nPassword: " : (options.terminalOutput ?? "\u001b[32mConnected to Relay\u001b[0m\r\n$ ")));
+    ws.send(Buffer.from(setup ? "SSH host fingerprint: SHA256:fixture\r\nPassword: " : state.output));
     ws.onMessage((raw) => {
       const message = JSON.parse(String(raw));
       terminalMessages.push({ path, ...message });
       if (message.type === "claim") {
-        if (!terminalOccupied && options.replayQueriesBeforeClaim) ws.send(Buffer.from("\u001b[6n".repeat(500)));
-        if (options.deferTerminalClaim && !terminalOccupied) return;
-        terminal.owner = !terminalOccupied;
-        ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: false, ...terminalGeometry }));
+        const occupied = state.occupied || [...terminals].some((other) => other !== terminal && other.path === path && other.owner);
+        if (!occupied && options.replayQueriesBeforeClaim) ws.send(Buffer.from("\u001b[6n".repeat(500)));
+        if (state.deferClaim && !occupied) return;
+        terminal.owner = !occupied;
+        sendControl(path);
       }
-      if (message.type === "release") { terminal.owner = false; ws.send(JSON.stringify({ type: "control", owner: false, available: !terminalOccupied, ...terminalGeometry })); }
-      if (message.type === "resize" && terminal.owner && !options.deferTerminalResize) {
-        terminalGeometry = { cols: message.cols, rows: message.rows };
-        ws.send(JSON.stringify({ type: "control", owner: true, available: false, ...terminalGeometry }));
+      if (message.type === "release") { terminal.owner = false; sendControl(path); }
+      if (message.type === "resize" && terminal.owner && !state.deferResize) {
+        state.geometry = { cols: message.cols, rows: message.rows };
+        sendControl(path);
       }
-      if (message.type === "input" && (setup || terminal.owner)) ws.send(Buffer.from(String(message.data).replaceAll("\u007f", "\b \b")));
+      if (message.type === "input" && (setup || terminal.owner)) {
+        const output = Buffer.from(String(message.data).replaceAll("\u007f", "\b \b"));
+        if (setup) ws.send(output);
+        else for (const viewer of terminals) if (viewer.path === path) viewer.ws.send(output);
+      }
     });
   });
   return {
-    hosts, sessions, maintenanceJobs, mastermind, workspace, pages, approvals, observers, mutations, terminalMessages, attachments, directoryRequests, reconnectRequests, sessionRequests,
+    hosts, sessions, maintenanceJobs, mastermind, workspace, pages, approvals, observers, mutations, terminalMessages, attachments, detachments, directoryRequests, reconnectRequests, sessionRequests,
     attachMastermind: (execution: "native" | "worker" = "native") => {
       const config = mastermind.config!;
       const session: Session = { id: `mastermind-session-${mastermind.revision}`, title: "Mastermind", workspace: "Relay", cwd: config.cwd, harness: execution === "worker" ? "shell" : config.harness, ...(execution === "native" ? { agentMode: config.agentMode, mastermindId: "0123456789abcdef0123456789abcdef" } : {}), status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -240,24 +278,32 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     },
     stateRequests: () => stateRequests,
     setAuthentication: (next: boolean, token = csrfToken) => { authorized = next; csrfToken = token; },
-    setTerminalOccupied: (occupied: boolean) => {
-      terminalOccupied = occupied;
-      for (const terminal of terminals) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !occupied && !terminal.owner, ...terminalGeometry }));
+    activeTerminalPaths: () => [...terminals].map((terminal) => terminal.path),
+    setTerminalOccupied: (occupied: boolean, path?: string) => {
+      if (!path) terminalDefaults.occupied = occupied;
+      else terminalState(path).occupied = occupied;
+      for (const [key, state] of terminalStates) if (!path || key === path) { state.occupied = occupied; sendControl(key); }
     },
-    sendTerminalGeometry: (cols: number, rows: number, reason?: string) => {
-      terminalGeometry = { cols, rows };
-      for (const terminal of terminals) terminal.ws.send(JSON.stringify({ type: "control", owner: terminal.owner, available: !terminalOccupied && !terminal.owner, ...terminalGeometry, reason }));
+    sendTerminalGeometry: (cols: number, rows: number, reason?: string, path?: string) => {
+      if (!path) terminalDefaults.geometry = { cols, rows };
+      else terminalState(path).geometry = { cols, rows };
+      for (const [key, state] of terminalStates) if (!path || key === path) { state.geometry = { cols, rows }; sendControl(key, reason); }
     },
-    sendTerminalOutput: (data: string) => { for (const terminal of terminals) terminal.ws.send(Buffer.from(data)); },
-    grantTerminalControl: () => {
-      for (const terminal of terminals) {
+    sendTerminalOutput: (data: string, path?: string) => {
+      for (const terminal of terminals) if (!path || terminal.path === path) terminal.ws.send(Buffer.from(data));
+    },
+    grantTerminalControl: (path?: string) => {
+      for (const terminal of terminals) if (!path || terminal.path === path) {
         terminal.owner = true;
-        terminal.ws.send(JSON.stringify({ type: "control", owner: true, available: false, ...terminalGeometry }));
+        sendControl(terminal.path);
       }
     },
-    disconnectTerminals: () => {
-      for (const terminal of terminals) terminal.ws.close({ code: 1011, reason: "Fixture connection dropped" });
-      terminals.clear();
+    disconnectTerminals: (path?: string) => {
+      for (const terminal of terminals) if (!path || terminal.path === path) {
+        terminals.delete(terminal);
+        detachments.push(terminal.path);
+        terminal.ws.close({ code: 1011, reason: "Fixture connection dropped" });
+      }
     },
   };
 }

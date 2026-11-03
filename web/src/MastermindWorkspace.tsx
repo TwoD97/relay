@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowRight, ArrowUpRight, BrainCircuit, CircleAlert, FileCode2, FilePlus2, LayoutDashboard, ListTodo, LoaderCircle, Pencil, Plus, RefreshCw, Search, Terminal as TerminalIcon, Trash2 } from "lucide-react";
+import { ArrowRight, ArrowUpRight, BrainCircuit, CircleAlert, FileCode2, FilePlus2, LayoutDashboard, ListTodo, LoaderCircle, Maximize2, Minimize2, MoveHorizontal, Pencil, Plus, RefreshCw, Search, Terminal as TerminalIcon, Trash2 } from "lucide-react";
 import { api, errorMessage } from "./api";
 import { useAppearance } from "./appearance";
 import { Confirm, InlineError } from "./Forms";
@@ -26,6 +26,7 @@ export function MastermindWorkspace({ fleet, actions, section = "overview", page
   const appearance = useAppearance();
   const [page, setPage] = useState<MastermindPage>();
   const [pageError, setPageError] = useState<string>();
+  const [fitPage, setFitPage] = useState<string>();
   const editorGeneration = useRef(0);
   const [pageReload, setPageReload] = useState(0);
   const [loadingPage, setLoadingPage] = useState(false);
@@ -40,6 +41,7 @@ export function MastermindWorkspace({ fleet, actions, section = "overview", page
   const rememberedPage = useRef<string>(undefined);
   useEffect(() => { if (pageId) rememberedPage.current = pageId; }, [pageId]);
   const selected = pageId ? state?.pages.find((item) => item.id === pageId) : state?.pages.find((item) => item.id === rememberedPage.current) ?? state?.pages[0];
+  const fitWidth = Boolean(selected && fitPage === selected.id);
   const locked = !state || workspace.busy || workspace.uncertain || Boolean(workspace.error || fleet.error);
   useEffect(() => {
     setPageError(undefined);
@@ -55,9 +57,9 @@ export function MastermindWorkspace({ fleet, actions, section = "overview", page
   }, [section, selected?.id, selected?.updatedAt, pageReload]);
   const document = useMemo(() => {
     if (!page || page.id !== selected?.id || loadingPage || pageError) return undefined;
-    try { return { html: mastermindHTML(page.html, appearance.resolved) }; }
+    try { return { html: mastermindHTML(page.html, appearance.resolved, fitWidth) }; }
     catch (cause) { return { error: errorMessage(cause) }; }
-  }, [page, selected?.id, loadingPage, pageError, appearance.resolved]);
+  }, [page, selected?.id, loadingPage, pageError, appearance.resolved, fitWidth]);
   const updateStatus = (task: MastermindTask, status: MastermindTaskStatus) => {
     if (!state || locked) return;
     void workspace.mutate(state.revision, () => api.saveMastermindTask(state.revision, { ...task, status }, task.id), { kind: "task", id: task.id });
@@ -83,10 +85,10 @@ export function MastermindWorkspace({ fleet, actions, section = "overview", page
     </article>;
   };
   return <div className={`mastermind-workspace workspace-view-${section} ${expanded ? "mastermind-expanded" : ""}`}>
-    <header className="workspace-heading"><div><span className="workspace-eyebrow"><BrainCircuit size={14} /> YOUR COORDINATOR</span><h1>Mastermind</h1><p>{views.find((view) => view.id === section)?.description}</p></div><button className="icon-button" aria-label="Refresh Mastermind workspace" title="Refresh workspace" onClick={() => { void workspace.refresh(); setPageReload((value) => value + 1); }}><RefreshCw size={16} /></button></header>
+    <header className="workspace-heading"><div><span className="workspace-eyebrow"><BrainCircuit size={14} /> YOUR COORDINATOR</span><h1>{section === "pages" ? "Pages" : "Mastermind"}</h1><p>{views.find((view) => view.id === section)?.description}</p></div><button className="icon-button" aria-label="Refresh Mastermind workspace" title="Refresh workspace" onClick={() => { void workspace.refresh(); setPageReload((value) => value + 1); }}><RefreshCw size={16} /></button></header>
     <nav className="workspace-view-navigation" aria-label="Mastermind views">{views.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} aria-current={section === id ? "page" : undefined} onClick={() => onSection(id)}><Icon size={16} /><span>{label}</span>{state && (id === "pages" || id === "tasks") && <small aria-hidden="true">{id === "pages" ? state.pages.length : state.tasks.filter((task) => task.status !== "done").length}</small>}</button>)}</nav>
     {(workspace.error || workspace.mutationError || workspace.uncertain) && <div className="workspace-errors"><InlineError error={workspace.error || workspace.mutationError} />{workspace.uncertain && <><p>The previous change is unconfirmed. Review the current workspace; Relay will not repeat it.</p>{workspace.unknown?.id && <p>Requested {workspace.unknown.kind ?? "item"} ID: <code>{workspace.unknown.id}</code></p>}<button className="text-button" disabled={!workspace.canResume || Boolean(fleet.error)} onClick={() => setReviewing(true)}>Review and resume editing</button></>}</div>}
-    <Mastermind fleet={fleet} actions={actions} {...navigation} presentation={section === "terminal" ? "terminal" : "summary"} onTerminal={() => onSection("terminal")} expanded={expanded} onExpand={onExpand} />
+    {section !== "pages" && <Mastermind fleet={fleet} actions={actions} {...navigation} presentation={section === "terminal" ? "terminal" : "summary"} onTerminal={() => onSection("terminal")} expanded={expanded} onExpand={onExpand} />}
     {section === "overview" && <div className="workspace-overview workspace-scroll">
       <div className="workspace-progress" aria-label="Task progress">{statuses.map((status) => <button key={status.value} className={`progress-${status.value}`} disabled={!state} onClick={() => openTasks(status.value)}><span><i />{status.label}</span><strong>{state ? count(status.value) : "—"}</strong><ArrowUpRight size={15} aria-hidden="true" /></button>)}</div>
       <div className="workspace-overview-grid">
@@ -106,7 +108,8 @@ export function MastermindWorkspace({ fleet, actions, section = "overview", page
     {section === "pages" && <section className="workspace-pages" aria-label="Mastermind pages">
       <aside className="workspace-page-navigation"><header><h2>Pages <small>{state?.pages.length ?? "—"}</small></h2><button className="icon-button" aria-label="New page" title="New page" onClick={beginPage} disabled={locked || (state?.pages.length ?? 0) >= 16}><FilePlus2 size={17} /></button></header><div className="canvas-tabs" role="tablist" aria-label="Canvas pages" aria-orientation="vertical">{state?.pages.map((item) => <button key={item.id} role="tab" tabIndex={selected?.id === item.id ? 0 : -1} onKeyDown={(event) => { if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return; event.preventDefault(); const tabs = Array.from(event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>("[role=tab]")); const index = tabs.indexOf(event.currentTarget); const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length; tabs[next]?.focus(); tabs[next]?.click(); }} aria-selected={selected?.id === item.id} aria-controls="mastermind-canvas-panel" id={`canvas-tab-${item.id}`} onClick={() => onPage(item.id)}><FileCode2 size={16} /><span>{item.title}</span></button>)}</div>{state && !state.pages.length && <p className="workspace-page-hint">Your shared pages will appear here.</p>}</aside>
       <section className="workspace-canvas" aria-label="Mastermind canvas">
-        {selected && <div className="canvas-page-actions"><div><h2>{selected.title}</h2><small>Edited {editedAt(selected.updatedAt)}</small></div><button className="text-button" disabled={locked || loadingPage || !page || page.id !== selected.id || Boolean(pageError)} onClick={() => { workspace.clearMutationError(); editorGeneration.current++; setPageEditor({ revision: state!.revision, page }); }}><Pencil size={13} />Edit HTML</button><button className="icon-button" aria-label="Delete canvas page" title="Delete canvas page" disabled={locked} onClick={() => setRemoving({ revision: state!.revision, kind: "page", id: selected.id, title: selected.title })}><Trash2 size={15} /></button></div>}
+        {selected && <div className="canvas-page-actions"><div><h2>{selected.title}</h2><small>Edited {editedAt(selected.updatedAt)}</small></div><button className="text-button canvas-fit-width" aria-label="Fit page width" aria-pressed={fitWidth} title="Fit outer page content to this preview; saved HTML stays unchanged" disabled={!document?.html} onClick={() => setFitPage(fitWidth ? undefined : selected.id)}><MoveHorizontal size={15} /><span>Fit page width</span></button><button className="icon-button canvas-expand" aria-label={expanded ? "Restore page layout" : "Expand page to full window"} title={expanded ? "Restore page layout" : "Expand page to full window"} onClick={onExpand}>{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="text-button" disabled={locked || loadingPage || !page || page.id !== selected.id || Boolean(pageError)} onClick={() => { workspace.clearMutationError(); editorGeneration.current++; setPageEditor({ revision: state!.revision, page }); }}><Pencil size={13} />Edit HTML</button><button className="icon-button" aria-label="Delete canvas page" title="Delete canvas page" disabled={locked} onClick={() => setRemoving({ revision: state!.revision, kind: "page", id: selected.id, title: selected.title })}><Trash2 size={15} /></button></div>}
+        {expanded && !selected && <div className="canvas-page-actions canvas-empty-actions"><button className="text-button" onClick={onExpand}><Minimize2 size={16} />Restore page layout</button></div>}
         <div className="canvas-document" id="mastermind-canvas-panel" role="tabpanel" aria-labelledby={selected ? `canvas-tab-${selected.id}` : undefined}>
           {loadingPage ? <div className="workspace-empty"><LoaderCircle className="spin" size={23} /><p>Loading canvas page…</p></div> : pageError || document?.error ? <div className="workspace-empty"><CircleAlert size={23} /><p>{pageError || document?.error}</p>{pageError && <button className="text-button" onClick={() => setPageReload((value) => value + 1)}>Reload page</button>}</div> : document?.html ? <iframe title={`${selected!.title} canvas`} sandbox="" referrerPolicy="no-referrer" srcDoc={document.html} /> : <div className="workspace-empty"><FileCode2 size={30} /><h3>{pageId && !selected ? "This page is unavailable" : "A canvas for the bigger picture"}</h3><p>{pageId && !selected ? "It may have been removed. Choose another page or create a new one." : "Mastermind can publish plans, notes, reports, and diagrams here. Pages render safely without scripts or external connections."}</p><button className="button secondary compact" disabled={locked} onClick={beginPage}><FilePlus2 size={14} />Create a page</button></div>}
         </div>
