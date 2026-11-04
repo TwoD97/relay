@@ -22,7 +22,7 @@ import (
 // never replayed.
 func sessionCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: relay session list|start|read|send|stop [options]")
+		return errors.New("usage: relay session list|start|read|send|stop|open [options]")
 	}
 	action := args[0]
 	f := flag.NewFlagSet("session "+action, flag.ContinueOnError)
@@ -35,7 +35,7 @@ func sessionCommand(args []string) error {
 	sshPort := f.Int("ssh-port", 0, "SSH port (zero respects SSH configuration)")
 	fleetHost := f.String("host", "", "Exact machine name or ID from relay fleet list")
 	fleetID := f.String("fleet", "", "Controller ID to select when fleet machine names are ambiguous (requires --host)")
-	id := f.String("id", "", "Session ID for read, send, or stop")
+	id := f.String("id", "", "Session ID for read, send, stop, or open")
 	harness := f.String("harness", "shell", "shell, claude, or codex")
 	mode := f.String("mode", "", "Agent launch mode for start: manual (provider defaults) or auto (full tool permissions)")
 	cwd := f.String("cwd", "~", "Existing project directory")
@@ -87,6 +87,9 @@ func sessionCommand(args []string) error {
 		if provided["socket"] {
 			return errors.New("--ssh uses the remote user's Relay runtime; do not combine it with --socket")
 		}
+	}
+	if action == "open" {
+		return sessionOpen(*id, *fleetHost, *socket, *sshHost, *sshPort, useController)
 	}
 	method, path := "GET", "/api/sessions"
 	var body any

@@ -164,7 +164,7 @@ func (s *Server) monitorMastermind() {
 	defer tick.Stop()
 	for {
 		record := s.mastermind.current()
-		if record.Enabled && record.Config != nil && s.ctx.Err() == nil {
+		if record.Enabled && record.Config != nil && s.ctx.Err() == nil && !s.coordinatorDelegated() {
 			s.reconcileMastermind(record)
 		}
 		select {

@@ -6,16 +6,17 @@ export function terminalPanes(selection: Selection): TerminalPaneRef[] {
   if (!selection?.host || !selection.session) return [];
   return selection.panes?.length ? selection.panes : [{ host: selection.host, session: selection.session }];
 }
-export function paneSelection(panes: TerminalPaneRef[], active: number, expanded = false): Selection {
+export function paneSelection(panes: TerminalPaneRef[], active: number, expanded = false, groupId?: string): Selection {
   const selected = panes[active];
-  return selected ? { host: selected.host, session: selected.session, panes, expanded } : null;
+  return selected ? { host: selected.host, session: selected.session, panes, expanded, ...(groupId ? { groupId } : {}) } : null;
 }
 export function terminalLayoutHash(selection: Selection): string | null {
   const panes = terminalPanes(selection);
-  if (panes.length < 2) return null;
+  if (!panes.length || (panes.length < 2 && !selection?.groupId && !panes[0].createdAt)) return null;
   const active = Math.max(0, panes.findIndex((pane) => pane.host === selection?.host && pane.session === selection.session));
   const query = new URLSearchParams({ panes: JSON.stringify(panes), active: String(active) });
   if (selection?.expanded) query.set("expanded", "1");
+  if (selection?.groupId) query.set("group", selection.groupId);
   return `terminals?${query}`;
 }
 export function readTerminalLayout(hash: string): Selection {
@@ -33,6 +34,8 @@ export function readTerminalLayout(hash: string): Selection {
     if (new Set(clean.map(paneID)).size !== clean.length) return null;
     const active = Number(query.get("active") ?? "0");
     if (!Number.isInteger(active) || active < 0 || active >= clean.length) return null;
-    return paneSelection(clean, active, query.get("expanded") === "1");
+    const group = query.get("group");
+    if (group && !/^[a-f0-9-]{36}$/.test(group)) return null;
+    return paneSelection(clean, active, query.get("expanded") === "1", group ?? undefined);
   } catch { return null; }
 }

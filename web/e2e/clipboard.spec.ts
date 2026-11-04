@@ -33,6 +33,7 @@ test("Ctrl+C copies a terminal selection and still interrupts when nothing is se
   await page.evaluate(() => {
     const state = window as unknown as { copied: string[] };
     state.copied = [];
+    document.execCommand = () => false;
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { state.copied.push(text); } } });
   });
   await page.locator(".terminal-canvas").click();
@@ -45,7 +46,7 @@ test("Ctrl+C copies a terminal selection and still interrupts when nothing is se
   await expect(page.getByRole("button", { name: "Copy terminal selection" })).toBeEnabled();
   await page.keyboard.press("Control+c");
   await page.getByRole("button", { name: "Copy terminal selection" }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["COPY_ME", "COPY_ME"]);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["COPY_ME", "COPY_ME", "COPY_ME"]);
   expect(fixture.terminalMessages.filter((message) => message.type === "input").map((message) => message.data).join("")).toBe("\u0003");
 });
 
@@ -69,7 +70,7 @@ test("copy fallback selects the exact terminal text without sending input", asyn
   const columns = fixture.terminalMessages.filter((message) => message.type === "resize").at(-1)!.cols!;
   await selectFirstWord(page, columns, 7);
   await page.keyboard.press("Control+c");
-  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["COPY_ME"]);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["COPY_ME", "COPY_ME"]);
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
 });

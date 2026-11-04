@@ -64,7 +64,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     const method = request.method();
     const body = request.postData() ? request.postDataJSON() : undefined;
     // Startup reconnect is recorded separately from explicit user mutations.
-    if (method !== "GET" && path !== "/api/reconnect") mutations.push({ method, path, body, csrf: request.headers()["x-relay-csrf"] });
+    if (method !== "GET" && path !== "/api/reconnect" && path !== "/api/peer-sync/groups") mutations.push({ method, path, body, csrf: request.headers()["x-relay-csrf"] });
     const json = (value: unknown, status = 200) => route.fulfill({ status, json: value });
     if (!authorized) return json({ error: "Unauthorized" }, 401);
     if (method !== "GET" && request.headers()["x-relay-csrf"] !== csrfToken) return json({ error: "Invalid CSRF token" }, 403);
@@ -80,6 +80,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       return json({ queued }, 202);
     }
     if (path === "/api/state") { stateRequests++; return json({ version: "0.1.0-test", hosts, maintenanceJobs, mastermind }); }
+    if (path === "/api/mastermind/migration" && method === "GET") return json({});
     if (path.startsWith("/api/mastermind/workspace")) {
       const match = path.match(/^\/api\/mastermind\/workspace\/(pages|tasks)(?:\/([^/]+))?$/);
       if (!match) return json(workspace);
@@ -97,12 +98,15 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
       } else {
         const item = { ...body, id: id ?? body.id ?? String(workspace.revision).padStart(32, "0"), updatedAt: workspace.updatedAt, ...(kind === "tasks" ? { detail: body.detail ?? "", status: body.status ?? "todo" } : {}) };
         delete item.revision;
-        if (existing) Object.assign(existing, item); else items.push(item);
+        if (existing) { Object.assign(existing, item); if (kind === "pages") delete (existing as MastermindPage).template; } else items.push(item);
       }
-      workspace.pages = pages.map(({ id, title, updatedAt }) => ({ id, title, updatedAt }));
+      workspace.pages = pages.map(({ id, title, updatedAt, template }) => ({ id, title, updatedAt, ...(template ? { template } : {}) }));
       const saved = items.find((item) => item.id === (id ?? body.id ?? String(workspace.revision).padStart(32, "0")));
       return json({ workspace, ...(method === "DELETE" ? {} : kind === "pages" ? { page: { ...saved, revision: workspace.revision } } : { task: saved }) });
     }
+    if (path === "/api/mastermind/control" && method === "GET") return json({ revision: 0, recovery: true, messages: [], lessons: [], listenerAt: "", telegram: { configured: false, paired: false, bot: "", status: "" } });
+    if (path === "/api/peer-sync" && method === "GET") return json({ sources: [], warnings: [], workspaceRevision: workspace.revision });
+    if (path === "/api/peer-sync/groups" && method === "POST") return json({ ok: true });
     if (path === "/api/mastermind" && method === "GET") return json(mastermind);
     if (path.startsWith("/api/mastermind/") && method === "POST") {
       if (body.revision !== mastermind.revision) return json({ error: "Mastermind settings changed. Reload the current state." }, 409);
@@ -124,6 +128,7 @@ export async function mockFleet(page: Page, options: { hosts?: Host[]; sessions?
     }
     const [, , , hostId, ...rest] = path.split("/");
     const suffix = rest.join("/");
+    if (suffix === "conversations" && method === "GET") { const query = new URL(route.request().url()).searchParams; return json({ cwd: query.get("cwd"), harness: query.get("harness"), conversations: [], truncated: false, resumeSupported: !options.legacyRuntime, renameMode: query.get("harness") === "claude" ? "relay" : "provider" }); }
     const host = hosts.find((host) => host.id === hostId);
     if (suffix === "connect") { if (host) { host.status = "connecting"; host.stage = "Authenticating with SSH"; } return json({ ok: true }); }
     if (suffix === "disconnect") { if (host) host.status = "disconnected"; return json({ ok: true }); }

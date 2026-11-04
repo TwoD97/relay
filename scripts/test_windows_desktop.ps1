@@ -362,20 +362,24 @@ function Test-TerminalClipboard {
     [void](Wait-Until { Terminal-Contains 'RELAY_NATIVE_CLIPBOARD_OK' } 'pasted command executes only after Enter')
     Send-Terminal "printf '\033[2J\033[HRELAY_COPY_ME\n'"
     [void](Wait-Until { Execute-JS 'return document.querySelector(".xterm-rows > div")?.textContent.trim()==="RELAY_COPY_ME";' } 'terminal copy fixture')
-    $point = Execute-JS 'const r=document.querySelector(".xterm-rows > div").getBoundingClientRect();return {x:Math.round(r.x+15),y:Math.round(r.y+r.height/2)};'
+    $point = Execute-JS 'const r=document.querySelector(".xterm-rows > div").getBoundingClientRect(),screen=document.querySelector(".xterm-screen").getBoundingClientRect(),cols=Number(document.querySelector(".terminal-shell").dataset.terminalCols);return {x:Math.round(r.x+1),end:Math.round(r.x+13*screen.width/cols),y:Math.round(r.y+r.height/2)};'
     [void](Session-WD POST '/actions' @{ actions=@(@{
         type='pointer'; id='clipboard-mouse'; parameters=@{pointerType='mouse'}; actions=@(
             @{type='pointerMove';duration=0;origin='viewport';x=$point.x;y=$point.y},
-            @{type='pointerDown';button=0}, @{type='pointerUp';button=0},
-            @{type='pause';duration=80},
-            @{type='pointerDown';button=0}, @{type='pointerUp';button=0}
+            @{type='pointerDown';button=0},
+            @{type='pointerMove';duration=200;origin='viewport';x=$point.end;y=$point.y},
+            @{type='pointerUp';button=0}
         )
     }) })
     [void](Wait-Until { Execute-JS 'return document.querySelector("[aria-label=\"Copy terminal selection\"]")?.disabled===false;' } 'terminal text selection')
+    [void](Wait-Until { (Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));') -ceq 'RELAY_COPY_ME' } 'trusted terminal selection automatically copies text before a shortcut')
+    [void](Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.writeText("fixture replacement").then(()=>done(true),()=>done(false));')
+    Click-Selector '[aria-label="Copy terminal selection"]'
+    [void](Wait-Until { (Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));') -ceq 'RELAY_COPY_ME' } 'explicit Copy retries the unchanged selection')
     Send-TerminalKeys ([string][char]0xE009 + 'c' + [char]0xE000)
     $text = Execute-AsyncJS 'const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));'
     Assert-True ($text -ceq 'RELAY_COPY_ME') 'Ctrl+C did not copy the selected native terminal text'
-    Write-Host 'PASS: native Windows text clipboard, Ctrl+V paste and Ctrl+C selection copy'
+    Write-Host 'PASS: native Windows text clipboard, Ctrl+V paste, trusted drag auto-copy, explicit Copy retry and Ctrl+C selection copy'
 }
 
 function Send-Setup([string]$Text) {
@@ -545,11 +549,13 @@ function Test-LocalMastermindRendering {
     # Use the same private CLI surface supplied to the coordinator, without a
     # model call. It must publish through CAS and active-launch authorization.
     $workspace=Invoke-FixtureAgentCLI @('workspace','show')
+    Assert-True (@($workspace.pages | Where-Object { $_.template -eq 'status-v1' }).Count -eq 1) 'Fresh workspace did not expose its one managed live Status page'
     $html=Join-Path $script:StateDirectory 'mastermind-fixture-plan.html'
     [IO.File]::WriteAllText($html,'<main class="native-page-shell" style="width:420px;max-width:420px;margin-inline:auto"><h1>LOCAL MASTER PLAN</h1><p>Native fixture evidence.</p><div class="native-page-card" style="width:120px;max-width:120px">Fixed nested card</div></main><script>window.parent.FIXTURE_ESCAPE=true</script>',[Text.UTF8Encoding]::new($false))
     $created=Invoke-FixtureAgentCLI @('workspace','pages','create','--revision',[string]$workspace.revision,'--title','Native fixture plan','--html-file',$html)
     $task=Invoke-FixtureAgentCLI @('workspace','tasks','create','--revision',[string]$created.workspace.revision,'--title','Verify local coordinator','--status','doing','--page',$created.page.id,'--host','local','--session',$session)
     Select-MastermindView 'Pages'
+    Select-CanvasPage $created.page.id
     Assert-True (Execute-JS 'return !document.querySelector(".terminal-shell");') 'Pages view unexpectedly retained an interactive terminal'
     [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe");return !!frame&&frame.getAttribute("sandbox")===""&&frame.srcdoc.includes("LOCAL MASTER PLAN")&&!frame.srcdoc.includes("<script")&&!window.FIXTURE_ESCAPE;' } 'sandboxed agent-authored HTML page')
     $frame=Find-Element 'css selector' '.canvas-document iframe'
@@ -569,10 +575,13 @@ function Test-LocalMastermindRendering {
     Assert-True ($afterViews.session.id -eq $session -and $afterViews.session.createdAt -eq $coordinator.session.createdAt) 'Changing views replaced the local coordinator'
     Save-Screenshot 'native-local-mastermind.png'
 
-    # Open through the real UI command. A detached view is a separate process
+    # Submit through the same private agent CLI supplied to Mastermind. The
+    # primary desktop must claim once before opening the exact native viewer.
+    # A detached view is a separate process
     # and private profile, so its owned HWND is inspected rather than assuming
     # it belongs to this EdgeDriver's browsing-context list.
-    Click-Selector '[aria-label="Open terminal in new window"]'
+    $windowRequest=Invoke-FixtureAgentCLI @('session','open','--host','local','--id',$session)
+    Assert-True ($windowRequest.sessionId -eq $session -and $windowRequest.sessionCreatedAt -eq $coordinator.session.createdAt) 'Agent requested a different terminal identity'
     $script:DetachedIdentity=Wait-Until {
         foreach($candidate in @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $script:NativeIdentity.Id -and [string]::Equals($_.ExecutablePath,$script:Desktop,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine.Contains('--session-window') -and $_.CommandLine.Contains($session) })) {
             $window=[RelayWindowProbe]::MainFrame($candidate.ProcessId)
@@ -580,6 +589,7 @@ function Test-LocalMastermindRendering {
         };return $null
     } 'separate owned native terminal window' 60
     [void](Wait-Until { Save-NativeWindow $script:DetachedIdentity 'native-detached-mastermind.png' -CheckContent } 'detached terminal native paint' 30)
+    [void](Wait-Until { @((API-JSON '/api/hosts/local/runtime/views').requests | Where-Object { $_.id -eq $windowRequest.id -and $_.status -eq 'opened' }).Count -eq 1 } 'primary desktop confirms the agent window request')
     Assert-True (@((API-JSON '/api/hosts/local/runtime/sessions')).Count -eq 1) 'Opening a terminal window created another provider session'
     Close-NativeWindow
     Close-AppSession
@@ -599,47 +609,51 @@ function Test-LocalMastermindRendering {
     Write-Host 'PASS: local ConPTY Mastermind, private CLI canvas/tasks, sandbox, independent native window, lease and close/reopen persistence; no provider account or inference used'
 }
 
-function Read-CanvasWidths([bool]$Fitted = $false) {
+function Select-CanvasPage([string]$PageID) {
+    Assert-True ($PageID -match '^[a-f0-9]{32}$') 'Invalid test-owned page identity'
+    [void](Wait-Until { Execute-JS 'return !!document.querySelector("select[aria-label=\"Canvas page\"] option[value=\""+arguments[0]+"\"]");' @($PageID) } 'page appears in the compact selector')
+    $option=Find-Element 'css selector' ('select[aria-label="Canvas page"] option[value="'+$PageID+'"]')
+    [void](Session-WD POST "/element/$option/click" @{})
+    [void](Wait-Until { Execute-JS 'return location.hash.includes(arguments[0])&&document.querySelector("select[aria-label=\"Canvas page\"]")?.value===arguments[0];' @($PageID) } 'explicit page route')
+}
+
+function Read-CanvasWidths {
     $frame=Find-Element 'css selector' '.canvas-document iframe'
     [void](Session-WD POST '/frame' @{id=@{'element-6066-11e4-a52e-4f735466cecf'=$frame}})
     try {
-        return Wait-Until { Execute-JS 'const shell=document.querySelector(".native-page-shell"),card=document.querySelector(".native-page-card");if(!shell||!card)return false;const width=shell.getBoundingClientRect().width;if(arguments[0]?Math.abs(width-(innerWidth-32))>=2:Math.abs(width-420)>=1)return false;return {shell:width,card:card.getBoundingClientRect().width,viewport:innerWidth};' @($Fitted) } 'sandbox document paints its owned layout fixture'
+        return Wait-Until { Execute-JS 'const shell=document.querySelector(".native-page-shell"),card=document.querySelector(".native-page-card");if(!shell||!card)return false;const width=shell.getBoundingClientRect().width;if(Math.abs(width-(innerWidth-32))>=2)return false;return {shell:width,card:card.getBoundingClientRect().width,viewport:innerWidth};' } 'sandbox document automatically fits its owned layout fixture'
     } finally { [void](Session-WD POST '/frame' @{id=$null}) }
 }
 
 function Test-NativeCanvasLayout([string]$PageID, [int]$Revision, [string]$OriginalHTML) {
-    # Select the explicit page identity before expanding; its document must stay
-    # mounted on route/layout changes. Fitting is an explicit preview operation.
-    Click-Selector ('#canvas-tab-'+$PageID)
-    [void](Wait-Until { Execute-JS 'return location.hash.includes(arguments[0]);' @($PageID) } 'explicit page route')
+    Select-CanvasPage $PageID
     $before=Read-CanvasWidths
-    Assert-True ([Math]::Abs($before.shell-420) -lt 1 -and [Math]::Abs($before.card-120) -lt 1) 'Original authored page widths changed before opting in'
+    Assert-True ([Math]::Abs($before.shell-($before.viewport-32)) -lt 2 -and [Math]::Abs($before.card-120) -lt 1) 'Automatic page fitting changed a nested card or did not fill the viewport'
+    Assert-True (Execute-JS 'const toolbar=document.querySelector(".canvas-page-actions"),frame=document.querySelector(".canvas-document iframe");return toolbar.getBoundingClientRect().height<=48&&frame.getBoundingClientRect().height>=innerHeight-64&&!document.querySelector(".workspace-heading,.workspace-page-navigation,[aria-label=\"Fit page width\"]");') 'Pages did not provide a compact toolbar and full-height document'
     [void](Execute-JS 'window.__relayNativeCanvas=document.querySelector(".canvas-document iframe");return true;')
     Click-Selector '[aria-label="Expand page to full window"]'
-    [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe"),r=frame?.getBoundingClientRect();return frame===window.__relayNativeCanvas&&location.hash.endsWith(arguments[0]+"/window")&&r.width>=innerWidth-30&&r.height>=innerHeight-110&&r.top<100&&!document.querySelector(".mastermind-summary")&&getComputedStyle(document.querySelector(".workspace-page-navigation")).display==="none";' @($PageID) } 'expanded canvas keeps the same iframe and fills its native content window')
-    Click-Selector '[aria-label="Fit page width"]'
-    [void](Wait-Until { Execute-JS 'return document.querySelector("[aria-label=\"Fit page width\"]")?.getAttribute("aria-pressed")==="true";' } 'explicit page width fitting')
-    $fit=Read-CanvasWidths $true
-    Assert-True ($fit.shell -gt 420 -and [Math]::Abs($fit.shell-($fit.viewport-32)) -lt 2) 'Fit width did not expand the sole outer document wrapper'
-    Assert-True ([Math]::Abs($fit.card-120) -lt 1) 'Fit width changed a nested card layout'
+    [void](Wait-Until { Execute-JS 'const frame=document.querySelector(".canvas-document iframe"),r=frame?.getBoundingClientRect();return frame===window.__relayNativeCanvas&&location.hash.endsWith(arguments[0]+"/window")&&r.width>=innerWidth-30&&r.height>=innerHeight-64&&r.top<60&&!document.querySelector(".mastermind-summary");' @($PageID) } 'expanded canvas keeps the same iframe and fills its native content window')
+    $fit=Read-CanvasWidths
+    Assert-True ([Math]::Abs($fit.shell-($fit.viewport-32)) -lt 2 -and [Math]::Abs($fit.card-120) -lt 1) 'Expanded page did not retain automatic outer fitting and nested card layout'
     Assert-True (Execute-JS 'const frame=document.querySelector(".canvas-document iframe");return frame.getAttribute("sandbox")===""&&frame.srcdoc.includes("script-src "+String.fromCharCode(39)+"none"+String.fromCharCode(39))&&!window.FIXTURE_ESCAPE;') 'Fitting changed the canvas sandbox policy'
     $saved=API-JSON "/api/mastermind/workspace/pages/$PageID"
     Assert-True ($saved.html -ceq $OriginalHTML -and (API-JSON '/api/mastermind/workspace').revision -eq $Revision) 'Preview layout changed saved page HTML or workspace revision'
     Save-Screenshot 'native-page-expanded-fit.png'
-    Click-Selector '[aria-label="Fit page width"]'
-    $restored=Read-CanvasWidths
-    Assert-True ([Math]::Abs($restored.shell-420) -lt 1 -and [Math]::Abs($restored.card-120) -lt 1) 'Turning Fit off did not restore the original authored widths'
     Click-Selector '[aria-label="Restore page layout"]'
-    [void](Wait-Until { Execute-JS 'return !location.hash.endsWith("/window")&&document.querySelector(".canvas-document iframe")===window.__relayNativeCanvas&&getComputedStyle(document.querySelector(".workspace-page-navigation")).display!=="none";' } 'restoring page layout preserves the selected document')
-    Write-Host 'PASS: native canvas full-window layout keeps its iframe; explicit Fit widens only outer content and preserves nested cards, sandbox and saved HTML'
+    [void](Wait-Until { Execute-JS 'return !location.hash.endsWith("/window")&&document.querySelector(".canvas-document iframe")===window.__relayNativeCanvas&&document.querySelector("select[aria-label=\"Canvas page\"]")?.value===arguments[0];' @($PageID) } 'restoring page layout preserves the selected document')
+    Write-Host 'PASS: native canvas always fits outer content, retains nested cards and compact page selection, and preserves iframe, sandbox and saved HTML across expansion'
 }
 
 function Select-MastermindView([string]$Section) {
     Assert-True ($Section -in @('Overview','Pages','Tasks','Terminal')) 'Unknown test-owned Mastermind section'
+    if (Execute-JS 'return !!document.querySelector("[aria-label=\"Back to Mastermind overview\"]");') {
+        if ($Section -eq 'Pages') { return }
+        Click-Selector '[aria-label="Back to Mastermind overview"]'
+    }
     [void](Wait-Until { Execute-JS 'return [...document.querySelectorAll(".workspace-view-navigation button > span")].some(label=>label.textContent===arguments[0]);' @($Section) } 'Mastermind section navigation is ready')
     $element=Find-Element xpath "//nav[@aria-label='Mastermind views']/button[span[normalize-space(.)='$Section']]"
     [void](Session-WD POST "/element/$element/click" @{})
-    [void](Wait-Until { Execute-JS 'return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];' @($Section) } "Mastermind $Section view")
+    [void](Wait-Until { Execute-JS 'return arguments[0]==="Pages"?!!document.querySelector("[aria-label=\"Page controls\"]"):document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];' @($Section) } "Mastermind $Section view")
 }
 
 function App-Identity {
@@ -887,6 +901,15 @@ function Send-PaneTerminal([string]$Session, [string]$Text) {
     [void](Session-WD POST "/element/$element/value" @{text=($Text+[char]0xE007)})
 }
 
+function Read-NativeTerminalGroups {
+    $result=Execute-AsyncJS @'
+const done=arguments[arguments.length-1];
+window.__TAURI_INTERNALS__.invoke('terminal_groups',{}).then(value=>done({ok:true,value}),()=>done({ok:false}));
+'@
+    Assert-True $result.ok 'Native terminal-group storage is unavailable'
+    return $result.value
+}
+
 function Test-TerminalPanes([string]$OriginalSession) {
     $owned=@();$all=@();$records=@()
     try {
@@ -906,6 +929,15 @@ function Test-TerminalPanes([string]$OriginalSession) {
             [void](Wait-Until { Pane-JS $session.id 'return !!pane.querySelector(".xterm");' } 'new real PTY pane attaches')
         }
         Assert-True (Execute-JS 'return document.querySelectorAll(".terminal-pane").length===4 && [...document.querySelectorAll("[aria-label=\"Add terminal pane\"]")].every(button=>button.disabled);') 'Four-pane limit is not enforced'
+        $nativeGroup=Wait-Until {
+            $settings=Read-NativeTerminalGroups
+            foreach($group in @($settings.groups)) {
+                if(@($group.panes).Count -ne 4){continue}
+                $matches=$true
+                foreach($session in $all) { if(@($group.panes|Where-Object {$_.host -eq $script:remoteHost -and $_.session -eq $session.id -and $_.createdAt -eq $session.createdAt}).Count -ne 1){$matches=$false} }
+                if($matches){return $group}
+            };return $null
+        } 'four exact pane identities persist through native terminal-group IPC'
         [void](Execute-JS 'window.__relayNativePaneDOM=[...document.querySelectorAll(".terminal-pane .xterm")];')
         $markers=@()
         foreach($session in $all) {
@@ -949,6 +981,11 @@ pane.__relayGeometry={key,since:old?.key===key?old.since:now};return now-pane.__
         $last=$all[3]
         Click-Selector ('.terminal-pane[data-pane-session="'+$last.id+'"] [aria-label="Close pane"]')
         [void](Wait-Until { Execute-JS 'return document.querySelectorAll(".terminal-pane").length===3;' } 'close removes only the selected pane')
+        [void](Wait-Until {
+            $settings=Read-NativeTerminalGroups
+            $group=@($settings.groups|Where-Object {$_.id -eq $nativeGroup.id})
+            return $group.Count -eq 1 -and @($group[0].panes).Count -eq 3 -and @($group[0].panes|Where-Object {$_.session -eq $last.id}).Count -eq 0
+        } 'closing a pane durably updates only its native terminal group')
         $saved=@(API-JSON "/api/hosts/$script:remoteHost/runtime/sessions")
         foreach($session in $all) {
             $exact=@($saved|Where-Object {$_.id -eq $session.id -and $_.createdAt -eq $session.createdAt -and $_.status -eq 'running'})
@@ -960,7 +997,7 @@ pane.__relayGeometry={key,since:old?.key===key?old.since:now};return now-pane.__
         } 'closed pane releases its writer lease without ending the session')
         Assert-True ((API "/api/hosts/$script:remoteHost/runtime/sessions/$OriginalSession/input" POST @{data="`r"}).Status -eq 409) 'Closing another pane released the original pane writer lease'
         $records|ConvertTo-Json -Depth 6|Set-Content -Encoding UTF8 -LiteralPath (Join-Path $script:Artifacts 'native-terminal-panes.json')
-        Write-Host 'PASS: four real Windows-viewed SSH PTYs isolate input and dimensions; zoom preserves terminal elements; pane close retains exact running sessions'
+        Write-Host 'PASS: four real Windows-viewed SSH PTYs isolate input and dimensions; native groups persist exact identities; zoom preserves terminal elements; pane close retains exact running sessions'
     } finally {
         # Detach extra viewers first. Only sessions created above may be deleted.
         if($script:SessionID){try{[void](Execute-JS 'location.hash=arguments[0];return true;' @("#host/$script:remoteHost/session/$OriginalSession"))}catch{}}
@@ -1137,6 +1174,7 @@ function Start-AppSession {
     Assert-True ($result.capabilities.browserName -eq 'webview2') 'Driver did not start native WebView2'
     [void](Session-WD POST '/timeouts' @{ implicit=0; pageLoad=30000; script=10000 })
     [void](Wait-Until { (Select-NativeView 'content') -and (Execute-JS 'return document.querySelector(".page-heading h1")?.textContent === "Fleet overview";') } 'native Windows fleet rendering' 90)
+    Assert-True (Execute-JS 'const d=Object.getOwnPropertyDescriptor(window,"__RELAY_PRIMARY_WINDOW__");return d?.value===true&&d.writable===false&&d.configurable===false;') 'Native primary-window role is missing or mutable'
     $script:NativeIdentity = Wait-Until { App-Identity } 'native PE process and Win32 window'
 }
 

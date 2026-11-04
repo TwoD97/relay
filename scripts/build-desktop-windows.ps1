@@ -49,12 +49,28 @@ if (-not $CompileOnly) { $RequiredArtifacts += 'relay-controller-windows-amd64.e
 $Manifest = @{}
 $ManifestNames = @('SHA256SUMS')
 if (-not $CompileOnly) { $ManifestNames += 'SHA256SUMS.windows' }
+$OptionalArtifacts = @()
+$OptionalNotices = @()
+if (Test-Path -LiteralPath (Join-Path $BundleSource 'SHA256SUMS.whatsapp')) {
+    $OptionalArtifacts = @('relay-whatsapp-personal-linux-amd64', 'relay-whatsapp-personal-linux-arm64', 'relay-whatsapp-personal-windows-amd64.exe')
+    $OptionalNotices = @('WHATSAPP_PERSONAL_LICENSE.txt', 'WHATSAPP_PERSONAL_NOTICES.txt', 'relay-whatsapp-personal-source.tar.gz')
+    $RequiredArtifacts += $OptionalArtifacts
+    $ManifestNames += 'SHA256SUMS.whatsapp'
+}
 foreach ($ManifestName in $ManifestNames) {
     foreach ($Line in [IO.File]::ReadAllLines((Join-Path $BundleSource $ManifestName))) {
         if ($Line -notmatch '^([a-fA-F0-9]{64})\s+\*?([A-Za-z0-9._-]+)$') { throw 'Invalid runtime checksum manifest.' }
         if ($Manifest.ContainsKey($Matches[2])) { throw 'Duplicate runtime checksum entry.' }
         $Manifest[$Matches[2]] = $Matches[1]
     }
+}
+if ($OptionalArtifacts.Count -gt 0) {
+    $ConnectorEntries = @{}
+    foreach ($Line in [IO.File]::ReadAllLines((Join-Path $BundleSource 'SHA256SUMS.whatsapp'))) {
+        if ($Line -notmatch '^([a-fA-F0-9]{64})\s+\*?([A-Za-z0-9._-]+)$' -or $OptionalArtifacts -notcontains $Matches[2] -or $ConnectorEntries.ContainsKey($Matches[2])) { throw 'Invalid optional connector manifest.' }
+        $ConnectorEntries[$Matches[2]] = $true
+    }
+    if ($ConnectorEntries.Count -ne 3) { throw 'Optional connector manifest must include all three targets.' }
 }
 foreach ($Name in $RequiredArtifacts) {
     $Artifact = Join-Path $BundleSource $Name
@@ -99,7 +115,7 @@ foreach ($Name in $SourceFiles) {
     if (-not (Test-Path -LiteralPath $InputPath -PathType Leaf)) { throw "Missing source file: $Name" }
     Assert-PlainTree $InputPath
 }
-foreach ($Name in $RequiredArtifacts + $ManifestNames + @('VERSION', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.txt', 'README.md')) {
+foreach ($Name in $RequiredArtifacts + $ManifestNames + $OptionalNotices + @('VERSION', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.txt', 'README.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $BundleSource $Name) -PathType Leaf)) { throw "Missing bundle file: $Name" }
     Assert-PlainTree (Join-Path $BundleSource $Name)
 }
@@ -134,7 +150,7 @@ foreach ($Name in $SourceTrees) {
 $Resources = Join-Path $StageRoot 'resources'
 $Runtime = Join-Path $Resources 'runtime'
 New-Item -ItemType Directory -Force -Path $Runtime | Out-Null
-foreach ($Name in $RequiredArtifacts + $ManifestNames + @('VERSION', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.txt', 'README.md')) {
+foreach ($Name in $RequiredArtifacts + $ManifestNames + $OptionalNotices + @('VERSION', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.txt', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $BundleSource $Name) -Destination (Join-Path $Runtime $Name) -Force
 }
 foreach ($Name in $RequiredArtifacts) {

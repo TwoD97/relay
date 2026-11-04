@@ -156,7 +156,9 @@ test("real binary: Mastermind reuses its exact persistent agent and preserves pr
     expect(captured.fleet.hosts[0]).toMatchObject({ id: "local", name: "This computer", target: "local" });
     await expect(page.locator(".mastermind-terminal")).toHaveCount(0);
     await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Pages", exact: true }).click();
+    await page.getByLabel("Canvas page", { exact: true }).selectOption({ label: `Fixture plan ${first.id.slice(0, 8)}` });
     await expect(page.frameLocator(`iframe[title="Fixture plan ${first.id.slice(0, 8)} canvas"]`).getByRole("heading", { name: "Fixture coordinator plan", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Back to Mastermind overview", exact: true }).click();
     await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Tasks", exact: true }).click();
     await expect(page.locator("iframe,.mastermind-terminal")).toHaveCount(0);
     await expect(page.getByLabel(`Status for Review fixture plan ${first.id.slice(0, 8)}`, { exact: true })).toHaveValue("todo");

@@ -24,6 +24,9 @@ import (
 var runtimeVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}$`)
 
 func runtimeCommand(command string, args []string) error {
+	if command == "conversations" {
+		return conversationsCommand(args)
+	}
 	if command == "mastermind-worker" {
 		return mastermindWorkerCommand(args)
 	}
@@ -189,7 +192,10 @@ func serveDaemon(dir string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-app.RestartRequested():
+		}
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)

@@ -32,7 +32,10 @@ for (const [harness, state] of [["claude", "transition"], ["codex", "exited"], [
     const before = structuredClone(original);
     await page.getByRole("button", { name: "Open terminal here", exact: true }).click();
     await expect(page.getByRole("heading", { name: `${saved.title} · Terminal`, exact: true })).toBeVisible();
-    await expect(page).toHaveURL(/#host\/dev\/session\/created-session$/);
+    await expect(page).toHaveURL(url => {
+      const query = new URLSearchParams(url.hash.split("?")[1]);
+      return url.hash.startsWith("#terminals?") && query.get("active") === "0" && query.get("panes") === JSON.stringify([{ host: "dev", session: "created-session", createdAt: fixture.sessions.dev.find(session => session.id === "created-session")!.createdAt }]);
+    });
     expect(fixture.mutations).toEqual([{
       method: "POST", path: "/api/hosts/dev/runtime/sessions", csrf: "fixture-csrf",
       body: { title: `${saved.title} · Terminal`, workspace: saved.workspace, cwd: saved.cwd, harness: "shell" },

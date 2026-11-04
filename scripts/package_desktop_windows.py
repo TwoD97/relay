@@ -17,7 +17,10 @@ RUNTIME_FILES = sorted(BINARIES) + [
     "SHA256SUMS", "SHA256SUMS.windows", "VERSION", "LICENSE", "NOTICE",
     "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.txt", "README.md",
     "docs/ACTIVITY.md", "docs/CONTRACT.md", "docs/SHARED_CONTEXT.md", "docs/VALIDATION.md",
+    "docs/AGENT-WINDOWS.md", "docs/CONVERSATIONS.md", "docs/CONTROL_CENTER.md", "docs/WHATSAPP_BUSINESS.md", "docs/PERSONAL_WHATSAPP.md", "docs/MASTERMIND_MIGRATION.md",
 ]
+WHATSAPP_BINARIES = {"relay-whatsapp-personal-linux-amd64", "relay-whatsapp-personal-linux-arm64", "relay-whatsapp-personal-windows-amd64.exe"}
+WHATSAPP_FILES = sorted(WHATSAPP_BINARIES) + ["SHA256SUMS.whatsapp", "WHATSAPP_PERSONAL_LICENSE.txt", "WHATSAPP_PERSONAL_NOTICES.txt", "relay-whatsapp-personal-source.tar.gz"]
 MAX_FILE_BYTES = 128 << 20
 
 
@@ -76,6 +79,19 @@ def collect_payload(stage, readme):
         raise ValueError("The build stage is not owned by Relay")
     runtime = stage / "resources/runtime"
     files = {"runtime/" + name: read_input(runtime / name) for name in RUNTIME_FILES}
+    if any((runtime / name).exists() or (runtime / name).is_symlink() for name in WHATSAPP_FILES):
+        files.update({"runtime/" + name: read_input(runtime / name) for name in WHATSAPP_FILES})
+        entries = {}
+        for line in files["runtime/SHA256SUMS.whatsapp"].decode("utf-8").splitlines():
+            match = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?([A-Za-z0-9._-]+)", line)
+            if not match or match[2] in entries:
+                raise ValueError("Invalid optional connector checksum entry")
+            entries[match[2]] = match[1].lower()
+        if set(entries) != WHATSAPP_BINARIES:
+            raise ValueError("Optional connector checksum manifest must verify all three targets")
+        for name, checksum in entries.items():
+            if digest(files["runtime/" + name]) != checksum:
+                raise ValueError("Optional connector checksum mismatch: " + name)
     version = files["runtime/VERSION"].decode("utf-8").strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,100}", version):
         raise ValueError("Invalid runtime bundle version")

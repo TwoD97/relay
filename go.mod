@@ -9,8 +9,9 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260927004216-9c77d672503d
 	github.com/creack/pty v1.1.24
 	github.com/gorilla/websocket v1.5.3
-	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sys v0.49.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -26,5 +27,6 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
+	golang.org/x/sync v0.24.0 // indirect
 )

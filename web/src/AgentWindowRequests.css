@@ -1,0 +1,20 @@
+.agent-window-notice {
+  position: fixed;
+  z-index: 80;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 6px 24px #0003;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.agent-window-notice > span { flex: 1; }
+.agent-window-notice > button { flex-shrink: 0; }

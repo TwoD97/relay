@@ -467,6 +467,11 @@ for line in sys.stdin:
     const createdIDs: string[] = [];
     const providerIDs: Record<string, string[]> = { claude: [], codex: [] };
     await page.goto(launch.url);
+    // The one-time login may finish through a separate navigation from its
+    // handoff document. Wait for the authenticated app, not that document's
+    // load event, before replacing its route with the machine overview.
+    await expect(page).toHaveURL(`${origin}/`);
+    await expect(page.getByRole("heading", { name: "Fleet overview", exact: true })).toBeVisible();
     for (const harness of ["claude", "codex"] as const) {
       for (const mode of ["manual", "auto"] as const) {
         await page.goto(`${origin}/#host/local`);
@@ -505,8 +510,10 @@ for line in sys.stdin:
           expect(args.some((arg) => arg.includes("dangerously") || arg.includes("Relay session mode: Auto") || arg === "--append-system-prompt")).toBeFalsy();
         }
         const badge = `Launch mode: ${mode === "auto" ? "Auto · full access" : "Manual"}`;
+        await page.getByRole("button", { name: "Session details", exact: true }).click();
         await expect(page.getByLabel(badge, { exact: true })).toBeVisible();
         await page.reload();
+        await page.getByRole("button", { name: "Session details", exact: true }).click();
         await expect(page.getByLabel(badge, { exact: true })).toBeVisible();
         const historyURL = `${sessionsURL}/${session.id}/history`;
         await expect.poll(async () => (await page.request.get(historyURL)).text()).toContain("RELAY_MODE_FIXTURE_READY");

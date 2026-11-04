@@ -29,6 +29,12 @@ func TestImageUploadAuthenticatesExactSessionAndNeverSendsInput(t *testing.T) {
 	session := imageSession{ID: strings.Repeat("a", 32), CreatedAt: time.Now().UTC(), Status: "running"}
 	var mutations atomic.Int32
 	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Peer discovery performs this read even when no workspace sync
+		// capability is advertised. No other unexpected request is allowed.
+		if r.Method == "GET" && r.URL.Path == "/api/health" {
+			writeJSON(w, 200, map[string]any{"protocol": 1, "version": "fixture", "capabilities": map[string]bool{}})
+			return
+		}
 		if r.Method != "GET" || r.URL.Path != "/api/sessions" {
 			mutations.Add(1)
 			http.Error(w, "unexpected", 500)

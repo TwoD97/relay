@@ -16,6 +16,10 @@ func (c *Connection) DialContext(ctx context.Context, network, address string) (
 	if network != "tcp" && network != "tcp4" && network != "tcp6" && network != "unix" {
 		return nil, fmt.Errorf("unsupported transport network %q", network)
 	}
+	return c.dialCommand(ctx, bridgeScript)
+}
+
+func (c *Connection) dialCommand(ctx context.Context, script string) (net.Conn, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	stopConnection := context.AfterFunc(c.ctx, cancel)
@@ -32,7 +36,7 @@ func (c *Connection) DialContext(ctx context.Context, network, address string) (
 	session.Stdin = remote
 	session.Stdout = remote
 	session.Stderr = &lockedBuffer{b: boundedBuffer{limit: 16 << 10}}
-	if err := session.Start("/bin/sh -c " + quoteShell(bridgeScript)); err != nil {
+	if err := session.Start("/bin/sh -c " + quoteShell(script)); err != nil {
 		stopDial()
 		stopLifetime()
 		closeStream()

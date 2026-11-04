@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/TwoD97/relay/internal/conversations"
 	"io"
 	"net"
 	"net/http"
@@ -46,7 +47,17 @@ func notifyRuntime(args []string) error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
 	defer t.CloseIdleConnections()
-	payload, _ := json.Marshal(map[string]string{"kind": *kind, "source": *source})
+	event := map[string]string{"kind": *kind, "source": *source}
+	// Codex notify appends one JSON payload. Retain only a validated UUID.
+	if *source == "codex-notify" && f.NArg() == 1 && len(f.Arg(0)) <= 64<<10 {
+		var provider struct {
+			ThreadID string `json:"thread-id"`
+		}
+		if json.Unmarshal([]byte(f.Arg(0)), &provider) == nil && conversations.ValidID(provider.ThreadID) {
+			event["conversationId"] = provider.ThreadID
+		}
+	}
+	payload, _ := json.Marshal(event)
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://runtime/api/sessions/"+session+"/events", bytes.NewReader(payload))
 	if err != nil {
 		return err

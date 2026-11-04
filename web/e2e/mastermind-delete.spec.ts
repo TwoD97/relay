@@ -29,6 +29,7 @@ test("a delayed page deletion cannot replace a newer workspace view after its co
   await confirm.getByRole("button", { name: "Delete page", exact: true }).click();
   await expect.poll(() => dispatched).toBe(true);
   await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Back to Mastermind overview", exact: true }).click();
   await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Tasks", exact: true }).click();
   await expect(page).toHaveURL(/#mastermind\/tasks$/);
   release();

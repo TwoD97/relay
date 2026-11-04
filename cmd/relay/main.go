@@ -21,7 +21,7 @@ import (
 	"github.com/TwoD97/relay/web"
 )
 
-var version = "0.3.0-dev"
+var version = "0.4.0-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -64,13 +64,21 @@ func run(args []string) error {
 		return sessionCommand(args)
 	case "fleet":
 		return fleetCommand(args)
+	case "control":
+		return controlCommand(args)
+	case "coordinator":
+		return coordinatorCommand(args)
+	case "whatsapp-bridge":
+		return whatsappBridge(args)
+	case "skill-worker":
+		return skillWorker(args)
 	case "workspace":
 		return workspaceCommand(args)
 	case "local-agent-ensure", "local-agent-daemon", "local-agent-install":
 		return localAgentCommand(command, args)
 	case "project-context":
 		return projectContextCommand(args)
-	case "daemon", "ensure", "bridge", "harness-maintain", "mastermind-worker":
+	case "daemon", "ensure", "bridge", "harness-maintain", "mastermind-worker", "conversations":
 		return runtimeCommand(command, args)
 	}
 	return fmt.Errorf("unknown command %q; run relay help", command)
@@ -120,7 +128,17 @@ func serveUI(args []string) error {
 		startCancel()
 	}
 
-	app, err := controller.New(controller.Config{StateDir: opts.StateDir, BinaryDir: opts.BinaryDir, Version: version, Address: listener.Addr().String(), LocalSocket: localSocket, LocalAgentDir: localAgentDir, LocalAgentError: localAgentError, EnsureLocalAgent: ensureAgent, Assets: assets})
+	var ensureRuntime func(context.Context) error
+	if localSocket != "" {
+		ensureRuntime = func(ctx context.Context) error {
+			executable, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			return exec.CommandContext(ctx, executable, "ensure", "--state-dir", opts.RuntimeDir).Run()
+		}
+	}
+	app, err := controller.New(controller.Config{EnsureLocalRuntime: ensureRuntime, StateDir: opts.StateDir, BinaryDir: opts.BinaryDir, Version: version, Address: listener.Addr().String(), LocalSocket: localSocket, LocalAgentDir: localAgentDir, LocalAgentError: localAgentError, EnsureLocalAgent: ensureAgent, Assets: assets})
 	if err != nil {
 		return err
 	}

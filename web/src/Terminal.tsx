@@ -45,6 +45,8 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
   const [available, setAvailable] = useState(false);
   const [controlReason, setControlReason] = useState("");
   const [selected, setSelected] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{ failed: boolean; message: string }>();
+  const copyingSelection = useRef(false);
   const [geometry, setGeometry] = useState({ cols: 80, rows: 24 });
   const ownerRef = useRef(false);
   const claimPending = useRef(false);
@@ -108,29 +110,60 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
         if (anchor && !anchor.isDisposed) term.scrollToLine(anchor.line);
       } finally { anchor?.dispose(); }
     };
+    let copyOperation = 0;
+    let selectionGesture = false;
     const copyText = () => {
       const text = term.getSelection();
-      if (!text) return;
-      const fallback = () => {
-        if (disposed) return;
-        // Some embedded browsers do not implement the async clipboard API.
-        // Select the exact xterm text in a temporary DOM field for native copy.
-        const previous = document.activeElement;
-        const field = document.createElement("textarea");
-        field.value = text;
-        field.readOnly = true;
-        field.style.cssText = "position:fixed;opacity:0;pointer-events:none;left:-10000px;top:0";
+      if (!text || disposed) return;
+      const operation = ++copyOperation;
+      const report = (failed: boolean) => {
+        if (!disposed && operation === copyOperation) setCopyStatus({ failed, message: failed ? "Could not copy the selection. Use Copy or Ctrl+Shift+C to try again." : "Selection copied" });
+      };
+      // Perform the embedded browser's native copy during the user gesture.
+      // Waiting for an async API rejection first can lose that permission.
+      // Preserve xterm's virtual selection and never acquire a writer lease
+      // when restoring the previously focused input.
+      const previous = document.activeElement;
+      const field = document.createElement("textarea");
+      field.value = text;
+      field.readOnly = true;
+      field.tabIndex = -1;
+      field.setAttribute("aria-label", "Copying terminal selection");
+      field.style.cssText = "position:fixed;opacity:0;pointer-events:none;left:0;top:0;width:1px;height:1px";
+      let copied = false;
+      copyingSelection.current = true;
+      try {
         document.body.append(field);
+        field.focus({ preventScroll: true });
         field.select();
-        let copied = false;
-        try { copied = document.execCommand("copy"); } catch { /* Report below. */ }
+        copied = document.execCommand("copy");
+      } catch { /* Try the standard async API while this gesture is active. */ }
+      finally {
         field.remove();
         if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
-        if (!copied) setNote("Clipboard access was denied. Select text and use the system Copy command.");
-      };
-      if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(fallback);
-      else fallback();
+        copyingSelection.current = false;
+      }
+      if (copied) { report(false); return; }
+      try {
+        if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).then(() => report(false), () => report(true));
+        else report(true);
+      } catch { report(true); }
     };
+    const beginSelection = (event: MouseEvent) => {
+      selectionGesture = event.isTrusted && event.button === 0 && event.target instanceof Element && !!event.target.closest(".xterm-screen");
+    };
+    const completeSelection = (event: MouseEvent) => {
+      const completed = selectionGesture && event.isTrusted && event.button === 0;
+      selectionGesture = false;
+      // xterm finalizes selection on document mouseup. Window bubbling runs
+      // afterwards, still in the trusted gesture, including drags outside it.
+      if (completed && document.hasFocus()) copyText();
+    };
+    const cancelSelection = () => { selectionGesture = false; };
+    container.current.addEventListener("mousedown", beginSelection, true);
+    window.addEventListener("mouseup", completeSelection);
+    window.addEventListener("blur", cancelSelection);
+    window.addEventListener("pointercancel", cancelSelection);
     const targetIdentity = () => JSON.stringify(imageTargetRef.current);
     const invalidateFocus = () => { focusGeneration++; };
     term.textarea?.addEventListener("blur", invalidateFocus);
@@ -233,7 +266,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     };
     copySelection.current = copyText;
     pasteClipboard.current = pasteText;
-    const selection = term.onSelectionChange(() => setSelected(term.hasSelection()));
+    const selection = term.onSelectionChange(() => { setSelected(term.hasSelection()); setCopyStatus(undefined); });
     // Standard text clipboard shortcuts work in the desktop and browser. With
     // no selected text, Ctrl+C remains the remote interrupt. Ctrl+Alt+V sends
     // the literal Ctrl+V key when a remote application needs it.
@@ -442,6 +475,10 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
       document.fonts?.removeEventListener("loadingdone", resize);
       scale?.removeEventListener("change", scaleChanged);
       container.current?.removeEventListener("paste", pasteEvent, true);
+      container.current?.removeEventListener("mousedown", beginSelection, true);
+      window.removeEventListener("mouseup", completeSelection);
+      window.removeEventListener("blur", cancelSelection);
+      window.removeEventListener("pointercancel", cancelSelection);
       term.textarea?.removeEventListener("blur", invalidateFocus);
       window.removeEventListener("blur", invalidateFocus);
       window.removeEventListener("pointerup", finishScrollingPointer, true);
@@ -522,12 +559,13 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
     <div className="terminal-toolbar">
       <span className={`terminal-link ${active ? "live" : ""}`}>{active && exclusive ? owner ? <Keyboard size={12} /> : <Eye size={12} /> : <span className="status-dot" />}{finished ? "Saved output" : active ? exclusive ? owner ? "Controlling" : "Watching" : "Connected" : link === "connecting" && enabled ? "Connecting…" : "Disconnected"}</span>
       <span className="terminal-hint">{finished ? "This session has finished" : active ? exclusive && !owner ? controlReason || (available ? "Click the terminal to type" : "Another viewer is controlling this terminal") : note || controlReason || "Ctrl+V paste · Ctrl+C copy selection / interrupt" : note || "Input is paused"}</span>
-      <button className="text-button" disabled={!selected} onClick={() => copySelection.current()} aria-label="Copy terminal selection" title="Copy selection (Ctrl+C or Ctrl+Shift+C)"><Copy size={13} /> Copy</button>
+      <button className="text-button" disabled={!selected} onClick={() => copySelection.current()} aria-label="Copy terminal selection" title={copyStatus?.message ?? "Selected text copies automatically. Copy again with Ctrl+C or Ctrl+Shift+C."}><Copy size={13} />{copyStatus && !copyStatus.failed ? "Copied" : "Copy"}</button>
       {!finished && <button className="text-button" disabled={!writable} onClick={() => pasteClipboard.current()} aria-label="Paste clipboard into terminal" title="Paste text or a screenshot (Ctrl+V or Ctrl+Shift+V). Ctrl+Alt+V sends a literal Ctrl+V."><ClipboardPaste size={13} /> Paste</button>}
       {!finished && imageTarget && <button className="text-button" disabled={!writable || imageBusy} onClick={() => chooseImage.current()} aria-label="Attach image" title="Upload a PNG or JPEG to this session’s machine"><ImagePlus size={13} /> Image</button>}
       {active && exclusive && <button ref={controlButton} className="text-button" disabled={!owner && !available} onClick={() => owner ? socket.current?.send(JSON.stringify({ type: "release" })) : claim()}>{owner ? "Release control" : "Take control"}</button>}
       {!active && enabled && !finished && <button className="text-button" onClick={() => connect.current()} aria-label="Reconnect terminal"><RotateCw size={13} /> Reconnect</button>}
     </div>
+    {copyStatus?.failed && <div className="terminal-image-notice" role="alert">{copyStatus.message}</div>}
     <input ref={imagePicker} type="file" accept="image/png,image/jpeg" hidden aria-label="Choose terminal image" />
     {imageNote && <div className="terminal-image-notice" role="status">{imageNote}</div>}
     <div className="terminal-canvas" role="region" aria-label={label}
@@ -538,7 +576,7 @@ export default function Terminal({ path, enabled = true, autoReconnect = true, e
         scrollingPointer.current = nativeGutter || !!target?.closest(".xterm-scrollable-element > .scrollbar, .xterm-overview-ruler");
         if (scrollingPointer.current) claimIntent.current = false;
       }}
-      onFocus={(event) => { if (!scrollingPointer.current && event.nativeEvent.target === terminal.current?.textarea) claim(); }}
+      onFocus={(event) => { if (!copyingSelection.current && !scrollingPointer.current && event.nativeEvent.target === terminal.current?.textarea) claim(); }}
       onBlur={() => { claimIntent.current = false; }}
       onPointerDown={(event) => { if (event.button === 0 && !finished && !scrollingPointer.current) { claim(); terminal.current?.focus(); } }}><div ref={container} className="terminal-mount" /></div>
     <div className="terminal-display-toolbar">

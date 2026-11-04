@@ -5,6 +5,7 @@ mod frame;
 mod launch;
 mod platform;
 mod session_window;
+mod terminal_groups;
 mod ui_preferences;
 
 use launch::{is_shell_page, same_origin, Launcher};
@@ -74,7 +75,7 @@ fn run(route: Option<String>) -> tauri::Result<()> {
         }));
     }
     builder
-        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance, session_window::open_session_window, ui_preferences::sidebar_attention])
+        .invoke_handler(tauri::generate_handler![frame::frame_action, appearance::appearance, session_window::open_session_window, ui_preferences::sidebar_attention, terminal_groups::terminal_groups])
         .manage(state)
         .setup(move |app| {
             let owned_profile = session_window::Profile::new(app.handle(), detached)?;
@@ -99,6 +100,7 @@ fn run(route: Option<String>) -> tauri::Result<()> {
                 .background_color(initial_background)
                 .initialization_script(&initial_appearance)
                 .initialization_script(&initial_sidebar)
+                .initialization_script(session_window::primary_window_initialization(detached))
                 // Only this webview can reach the authenticated controller,
                 // with navigation constrained below. Enable its standard web
                 // clipboard API for explicit copy/paste gestures; no native

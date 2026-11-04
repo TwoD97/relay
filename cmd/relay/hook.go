@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"github.com/TwoD97/relay/internal/conversations"
 	"io"
 	"net"
 	"net/http"
@@ -42,6 +43,7 @@ func forwardPermissionHook(ctx context.Context, provider, event string, input io
 	}
 	var body struct {
 		Event          string          `json:"hook_event_name"`
+		SessionID      string          `json:"session_id"`
 		ToolName       string          `json:"tool_name"`
 		Input          json.RawMessage `json:"tool_input"`
 		Cwd            string          `json:"cwd"`
@@ -56,9 +58,12 @@ func forwardPermissionHook(ctx context.Context, provider, event string, input io
 	if event == "observe" && body.Event != "SessionStart" && body.Event != "UserPromptSubmit" {
 		return nil
 	}
-	// Do not forward transcript paths, provider session IDs, prompts, suggested
+	// Do not forward transcript paths, prompts, suggested
 	// rules or arbitrary other fields. Only pending requests carry tool arguments.
 	normalized := map[string]any{"provider": provider, "event": body.Event, "permissionMode": body.PermissionMode}
+	if conversations.ValidID(body.SessionID) {
+		normalized["conversationId"] = body.SessionID
+	}
 	if event == "permission" {
 		if body.ToolName == "" || len(body.Input) == 0 {
 			return nil

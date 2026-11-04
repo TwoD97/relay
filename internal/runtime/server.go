@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/TwoD97/relay/internal/conversations"
+	"github.com/TwoD97/relay/internal/peers"
+	"github.com/TwoD97/relay/internal/viewrequests"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +34,10 @@ const (
 )
 
 type Session struct {
+	RestartReceipt  string           `json:"restartReceipt,omitempty"`
+	RestartSource   *RestartSource   `json:"restartSource,omitempty"`
+	ConversationID  string           `json:"conversationId,omitempty"`
+	ResumedFrom     string           `json:"resumedFrom,omitempty"`
 	Permissions     *Permissions     `json:"permissions,omitempty"`
 	ProcessIdentity *ProcessIdentity `json:"processIdentity,omitempty"`
 	Recovery        *SessionRecovery `json:"recovery,omitempty"`
@@ -50,6 +57,13 @@ type Session struct {
 }
 
 type Server struct {
+	peerStore                         *peers.Store
+	peerError                         error
+	views                             *viewrequests.Queue
+	runtimeID, instanceID             string
+	restart                           *restartState
+	restartRequested                  chan struct{}
+	recoveryQuiescing                 bool
 	observer                          *observerManager
 	approvalMu                        sync.Mutex
 	approvals                         map[string]*approvalWaiter
@@ -91,6 +105,13 @@ func New(stateDir, version string) (*Server, error) {
 	}
 	hostname, _ := os.Hostname()
 	s := &Server{stateDir: dir, version: version, home: home, hostname: hostname, sessions: make(map[string]*liveSession), flushDone: make(chan struct{}), toolsMu: make(chan struct{}, 1)}
+	if err = s.initializeRuntimeIdentity(); err != nil {
+		return nil, err
+	}
+	if err = s.initializeRestart(); err != nil {
+		return nil, err
+	}
+	s.initializePeers()
 	if err = s.load(); err != nil {
 		return nil, err
 	}
@@ -99,12 +120,19 @@ func New(stateDir, version string) (*Server, error) {
 	s.observer = newObserver(s)
 	go s.observer.loop(ctx)
 	go s.flushLoop(ctx)
+	go s.restoreAcceptedRestart(ctx)
 	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerViews(mux)
+	s.registerPeers(mux)
 	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("GET /api/recovery/preflight", s.restartPreflight)
+	mux.HandleFunc("GET /api/recovery", s.restartStatus)
+	mux.HandleFunc("POST /api/recovery/start", s.restartCommit)
+	mux.HandleFunc("POST /api/recovery/review", s.restartReviewed)
 	mux.HandleFunc("GET /api/observer", s.getObserver)
 	mux.HandleFunc("POST /api/observer/config", s.configureObserver)
 	mux.HandleFunc("POST /api/observer/refresh", s.refreshObserver)
@@ -117,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions", s.createSession)
 	mux.HandleFunc("PATCH /api/sessions/{id}", s.patchSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.deleteSession)
+	mux.HandleFunc("POST /api/sessions/{id}/stop", s.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/terminal", s.terminal)
 	mux.HandleFunc("GET /api/sessions/{id}/history", s.history)
 	mux.HandleFunc("POST /api/sessions/{id}/input", s.input)
@@ -145,6 +174,9 @@ func (s *Server) Close() error {
 	}
 	s.mu.Unlock()
 	s.cancel()
+	if s.restart != nil {
+		<-s.restart.done
+	}
 	if s.observer != nil {
 		<-s.observer.done
 	}
@@ -178,6 +210,12 @@ func (s *Server) load() error {
 	for _, meta := range stored.Sessions {
 		if !validID(meta.ID) || s.sessions[meta.ID] != nil || validateLabel(meta.Title, 120) != nil || validateLabel(meta.Workspace, 80) != nil || !validHarness(meta.Harness) {
 			return errors.New("invalid saved session metadata")
+		}
+		if !validRestartReceipt(meta) {
+			return errors.New("invalid saved restoration receipt")
+		}
+		if (meta.ConversationID != "" && (!conversations.ValidID(meta.ConversationID) || meta.Harness == "shell")) || (meta.ResumedFrom != "" && (!conversations.ValidID(meta.ResumedFrom) || meta.Harness == "shell")) {
+			return errors.New("invalid saved conversation identity")
 		}
 		if meta.AgentMode != "" && (meta.Harness == "shell" || meta.AgentMode != "manual" && meta.AgentMode != "auto") {
 			return errors.New("invalid saved agent mode")

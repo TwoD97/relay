@@ -18,6 +18,7 @@ async function routingFixture(page: Page) {
 }
 
 async function activeSection(page: Page, section: string) {
+  if (section === "Pages") { await expect(page.getByRole("toolbar", { name: "Page controls" })).toBeVisible(); return; }
   await expect(page.getByRole("navigation", { name: "Mastermind views", exact: true, includeHidden: true }).getByRole("button", { name: section, exact: true, includeHidden: true })).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".topbar-breadcrumb")).toContainText(`Mastermind/${section}`);
 }
@@ -47,7 +48,7 @@ test("legacy Mastermind page links retain the page and expanded state with canon
   await page.getByRole("button", { name: "Restore page layout", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${secondPage}$`));
   await expect(page.locator(".app-shell")).not.toHaveClass(/terminal-expanded/);
-  await page.getByRole("tab", { name: "Plan", exact: true }).click();
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(firstPage);
   await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${firstPage}$`));
   await page.goBack();
   await activeSection(page, "Pages");

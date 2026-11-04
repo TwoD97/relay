@@ -20,6 +20,7 @@ test("Manual is the default and only records a supported launch mode", async ({ 
   await expect(dialog).toContainText("Your existing configuration determines when the agent asks for approval");
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   expect(fixture.mutations).toEqual([{ method: "POST", path: "/api/hosts/dev/runtime/sessions", csrf: "fixture-csrf", body: { title: "Mode test", workspace: work.workspace, cwd: work.cwd, harness: "codex", agentMode: "manual" } }]);
   await expect(page.getByLabel("Launch mode: Manual", { exact: true })).toBeVisible();
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
@@ -36,10 +37,12 @@ test("Auto is explicit, explains full access and persists only the runtime-repor
   await page.screenshot({ path: testInfo.outputPath("agent-auto-start.png"), fullPage: true });
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   await expect(page.getByLabel("Launch mode: Auto · full access", { exact: true })).toBeVisible();
   expect(fixture.mutations).toHaveLength(1);
   expect(fixture.mutations[0].body).toEqual({ title: "Mode test", workspace: work.workspace, cwd: work.cwd, harness: "codex", agentMode: "auto" });
   await page.reload();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   await expect(page.getByLabel("Launch mode: Auto · full access", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Auto · full access", { exact: true })).toHaveAttribute("title", /launch setting; permissions may change/);
   await page.goto("/#host/dev");
@@ -57,6 +60,7 @@ test("older runtime keeps provider defaults and cannot offer Auto", async ({ pag
   await expect(dialog).toContainText("does not advertise Auto support");
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   expect(fixture.mutations[0].body).toEqual({ title: "Mode test", workspace: work.workspace, cwd: work.cwd, harness: "codex" });
   await expect(page.getByLabel("Launch mode: Provider default", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Manual", { exact: true })).toHaveCount(0);
@@ -73,6 +77,7 @@ test("switching to a shell strips mode and returning to an agent starts with Man
   await dialog.getByRole("radio", { name: /Terminal/ }).check();
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   expect(fixture.mutations[0].body).toEqual({ title: "Mode test", workspace: work.workspace, cwd: work.cwd, harness: "shell" });
   await expect(page.locator(".agent-mode-badge")).toHaveCount(0);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
@@ -91,6 +96,7 @@ test("stale capability data disables Auto without silently changing the selected
   await dialog.getByRole("radio", { name: "Manual", exact: true }).check();
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   expect(fixture.mutations[0].body).not.toHaveProperty("agentMode");
 });
 
@@ -148,6 +154,7 @@ test("an unconfirmed launch mode is not fabricated or retried", async ({ page })
   await dialog.getByRole("radio", { name: "Auto", exact: true }).check();
   await dialog.getByRole("button", { name: "Start session", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Mode test", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Session details", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "did not confirm the requested launch mode" })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Provider default", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Launch mode: Auto · full access", { exact: true })).toHaveCount(0);

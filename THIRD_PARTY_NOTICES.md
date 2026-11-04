@@ -35,6 +35,21 @@ upstream distributions only when requested. They are not included in Relay's
 release bundle and retain their upstream licenses, notices, and service terms.
 Relay does not relicense those products or combine provider credentials.
 
+## Optional personal WhatsApp connector
+
+The separately distributed `relay-whatsapp-personal` executable is GPL-3.0-only,
+with its own module at `connectors/whatsapp-personal`. It incorporates the
+MPL-2.0 whatsmeow client and GPL-3.0 libsignal. Relay's core imports neither
+library and communicates with this optional component over bounded JSON pipes.
+The connector does not change the licenses of Relay's separate original files.
+
+Packages containing this component include the complete GPL text in
+`WHATSAPP_PERSONAL_LICENSE.txt`, incorporated dependency license texts in
+`WHATSAPP_PERSONAL_NOTICES.txt`, and complete corresponding source, pinned
+vendored dependencies, and an offline build script in
+`relay-whatsapp-personal-source.tar.gz`. Keep these together when redistributing
+the optional binaries. See [Personal WhatsApp](docs/PERSONAL_WHATSAPP.md).
+
 ## Maintaining the notice inventory
 
 `scripts/notices.py` builds the Go/browser inventory after the browser build.

@@ -7,6 +7,9 @@ import { Terminal } from "./LazyTerminal";
 import { canCreateSessions, localCoordinatorOnly } from "./runtimeCapabilities";
 import { TerminalWindowActions } from "./TerminalWindowActions";
 import { MachineStats } from "./MachineStats";
+import { RuntimeRecovery } from "./RuntimeRecovery";
+import { PeerSync } from "./PeerSync";
+import type { TerminalGroup } from "./terminalGroups";
 import { RuntimeMaintenance } from "./RuntimeMaintenance";
 import { AgentModeBadge } from "./AgentMode";
 import { AgentTools } from "./AgentTools";
@@ -19,7 +22,7 @@ import "./SessionView.css";
 
 export { FleetOverview } from "./Fleet";
 
-export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDisconnect, onForget, onSetup, onCreated, onRefresh, maintenanceJobs, maintenanceSessions, onMaintenance }: { host: Host; runtime?: RuntimeState; onNew: () => void; onSession: (session: Session) => void; onConnect: () => void; onDisconnect: () => void; onForget: () => void; onSetup: () => void; onCreated: (session: Session) => void; onRefresh: () => void; maintenanceJobs: MaintenanceJob[]; maintenanceSessions: Session[]; onMaintenance: (job: MaintenanceJob) => void }) {
+export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDisconnect, onForget, onSetup, onCreated, onRefresh, maintenanceJobs, maintenanceSessions, onMaintenance, onImportGroups }: { host: Host; runtime?: RuntimeState; onNew: () => void; onSession: (session: Session) => void; onConnect: () => void; onDisconnect: () => void; onForget: () => void; onSetup: () => void; onCreated: (session: Session) => void; onRefresh: () => void; maintenanceJobs: MaintenanceJob[]; maintenanceSessions: Session[]; onMaintenance: (job: MaintenanceJob) => void; onImportGroups: (groups: TerminalGroup[]) => void }) {
   const active = host.status === "online";
   const sessions = runtime?.sessions ?? [];
   const coordinatorOnly = localCoordinatorOnly(host, runtime);
@@ -46,6 +49,8 @@ export function HostOverview({ host, runtime, onNew, onSession, onConnect, onDis
     <section className="harness-section"><div className="section-heading"><div><h2>Coding agents</h2><p>Install once. Sign in on this machine. Start working.</p></div><span className="host-scope"><Server size={13} />{host.name}</span></div><InlineError error={error} />{!runtime?.harnesses.length ? <div className="harness-placeholder">{active ? "Checking installed coding agents…" : "Connect this machine to inspect its coding agents."}</div> : <div className="harness-grid">{runtime.harnesses.filter((harness) => harness.id !== "shell").map((harness) => <AgentTools key={harness.id} harness={harness} fallbackMaintenance={host.id !== "local" && !harness.management} active={active} pending={pending ?? (maintenanceJobs.some((job) => job.harness === harness.id && maintenanceActive(job)) ? `${harness.id}/background` : null)} onAction={(action) => void harnessAction(harness, action)} />)}</div>}<div className="agent-coordination"><Network size={16} /><div><strong>Coordinate sessions from your agent</strong><p>Use <code>$relay</code> in Codex or <code>/relay</code> in Claude Code. Other machines use this host’s existing SSH access.</p></div></div></section>
     <MaintenanceJobs host={host} jobs={maintenanceJobs} sessions={maintenanceSessions} onSession={onSession} />
     <RuntimeMaintenance host={host} onRefresh={onRefresh} />
+    <RuntimeRecovery key={`${host.id}/${host.createdAt}/${host.target}/${host.port}`} host={host} runtime={runtime} onRefresh={onRefresh} onSession={onSession} />
+    <PeerSync onImportGroups={onImportGroups} onRefresh={onRefresh} />
     {host.id !== "local" && <div className="host-settings-row"><div><h3>Connection</h3><p>Disconnecting keeps remote sessions running.</p></div><div className="host-settings-actions">{active && <button className="button secondary" onClick={onDisconnect}><Power size={14} /> Disconnect</button>}<button className="button ghost-danger" onClick={onForget}><Trash2 size={14} /> Forget machine</button></div></div>}
   </div></div>;
 }

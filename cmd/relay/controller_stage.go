@@ -89,7 +89,7 @@ func stageCopyFile(source, destination, expected string) error {
 	if copyErr == nil && (n <= 0 || n > stagedFileLimit || hex.EncodeToString(hash.Sum(nil)) != expected) {
 		copyErr = errors.New("controller release bytes changed while copying")
 	}
-	if copyErr == nil && filepath.Base(destination) == stagedControllerFilename {
+	if copyErr == nil && (filepath.Base(destination) == stagedControllerFilename || optionalWhatsAppArtifacts[filepath.Base(destination)]) {
 		copyErr = output.Chmod(0700)
 	}
 	if copyErr == nil {
@@ -133,6 +133,17 @@ func stageController(opts uiOptions) (uiOptions, error) {
 		manifest = nil
 		digests = map[string]string{}
 	}
+	connectorManifest, connectorDigests, err := stageWhatsAppManifest(opts.BinaryDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return opts, err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		connectorManifest = nil
+		connectorDigests = map[string]string{}
+	}
+	for name, digest := range connectorDigests {
+		digests[name] = digest
+	}
 	for name, expected := range digests {
 		actual, err := stageHashFile(filepath.Join(opts.BinaryDir, name))
 		if err != nil {
@@ -142,7 +153,7 @@ func stageController(opts uiOptions) (uiOptions, error) {
 			return opts, fmt.Errorf("runtime checksum mismatch for %s", name)
 		}
 	}
-	manifestHash := sha256.Sum256(manifest)
+	manifestHash := sha256.Sum256(append(append([]byte{}, manifest...), connectorManifest...))
 	releaseHash := sha256.Sum256([]byte(executableHash + ":" + hex.EncodeToString(manifestHash[:])))
 	parent := filepath.Join(opts.StateDir, "controller-releases")
 	if err := privateControllerDirectory(parent); err != nil {
@@ -167,6 +178,15 @@ func stageController(opts uiOptions) (uiOptions, error) {
 			}
 			if !bytes.Equal(installed, manifest) {
 				return errors.New("existing controller release has a different runtime manifest")
+			}
+		}
+		if connectorManifest != nil {
+			installed, _, err := stageWhatsAppManifest(release)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(installed, connectorManifest) {
+				return errors.New("existing controller release has a different optional connector manifest")
 			}
 		}
 		for name, expected := range digests {
@@ -205,6 +225,11 @@ func stageController(opts uiOptions) (uiOptions, error) {
 		}
 		if manifest != nil {
 			if err := stageWriteManifest(filepath.Join(staging, "SHA256SUMS"), manifest); err != nil {
+				return opts, err
+			}
+		}
+		if connectorManifest != nil {
+			if err := stageWriteManifest(filepath.Join(staging, whatsappManifestName), connectorManifest); err != nil {
 				return opts, err
 			}
 		}

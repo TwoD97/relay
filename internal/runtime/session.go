@@ -326,10 +326,20 @@ func (s *Server) start(meta Session, cols, rows int, factory commandFactory) (Se
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || (s.recoveryQuiescing && meta.RestartReceipt == "") {
 		s.mu.Unlock()
 		cancel()
 		return Session{}, errors.New("runtime is shutting down")
+	}
+	if meta.ConversationID != "" {
+		for _, existing := range s.sessions {
+			other := existing.snapshot()
+			if other.Harness == meta.Harness && other.ConversationID == meta.ConversationID && other.Status == "running" {
+				s.mu.Unlock()
+				cancel()
+				return Session{}, errors.New("This conversation already has a running Relay session; open that terminal instead")
+			}
+		}
 	}
 	if meta.MastermindID != "" {
 		for _, existing := range s.sessions {

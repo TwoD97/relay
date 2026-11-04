@@ -13,6 +13,8 @@ import (
 func (s *Server) AgentHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.RegisterAgentWorkspaceRoutes(mux)
+	s.RegisterAgentControlRoutes(mux)
+	mux.HandleFunc("POST /agent/views", s.agentOpenView)
 	mux.HandleFunc("GET /agent/fleet", func(w http.ResponseWriter, r *http.Request) {
 		hosts := s.store.list()
 		if s.hasLocalMastermind() {

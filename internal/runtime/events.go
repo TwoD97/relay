@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"github.com/TwoD97/relay/internal/conversations"
 	"net/http"
 	"os"
 	"strings"
@@ -38,8 +39,9 @@ func (s *Server) sessionEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var event struct {
-		Kind   string `json:"kind"`
-		Source string `json:"source"`
+		ConversationID string `json:"conversationId,omitempty"`
+		Kind           string `json:"kind"`
+		Source         string `json:"source"`
 	}
 	if err = decode(w, r, &event); err != nil {
 		fail(w, 400, err)
@@ -57,6 +59,9 @@ func (s *Server) sessionEvent(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		fail(w, 409, errors.New("event does not match an active harness"))
 		return
+	}
+	if conversations.ValidID(event.ConversationID) {
+		p.meta.ConversationID = event.ConversationID
 	}
 	if event.Kind == "working" {
 		p.meta.Attention = nil

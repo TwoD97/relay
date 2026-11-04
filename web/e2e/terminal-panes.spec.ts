@@ -275,7 +275,7 @@ test("creating a session from the picker uses the chosen machine and appends onl
   await page.getByRole("button", { name: "Add terminal pane", exact: true }).click();
   await page.getByRole("dialog", { name: "Add terminal pane", exact: true }).getByRole("button", { name: "New session on Production", exact: true }).click();
   const form = page.getByRole("dialog", { name: "Start a session", exact: true });
-  await expect(form).toContainText("A fresh terminal on Production.");
+  await expect(form).toContainText("Choose a conversation on Production.");
   await form.getByRole("radio", { name: "Terminal Your remote shell", exact: true }).check();
   await form.getByLabel("Project folder", { exact: false }).fill("/home/dev/projects/another project");
   await form.getByLabel("Workspace", { exact: false }).fill("Extra work");
@@ -335,25 +335,23 @@ test("a replaced session identity disconnects only that pane and is never silent
   expect(fixture.mutations).toEqual([]);
 });
 
-test("sidebar session navigation focuses an existing pane and replaces only the active pane otherwise", async ({ page }) => {
+test("sidebar session navigation opens one terminal while retaining the saved split", async ({ page }) => {
   const fixture = await fixtureForPanes(page);
   await page.goto("/#host/dev/session/session-1");
   await addPane(page, production, beta);
-  const original = await pane(page, "production").locator(".xterm").elementHandle();
   await openNavigation(page);
   const navigation = page.getByRole("navigation", { name: "Machines and workspaces", exact: true });
-  await navigation.getByRole("button", { name: "Development shell running", exact: true }).click();
-  await expect(pane(page, "dev")).toHaveAttribute("data-active", "true");
-  await expect(page.locator(".terminal-pane")).toHaveCount(2);
-  expect(fixture.attachments).toHaveLength(2);
+  await navigation.locator(".terminal-group-members .session-row").filter({ hasText: "Development shell" }).click();
+  await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  await expect(pane(page, "dev").locator(".xterm")).toBeVisible();
   await openNavigation(page);
   await navigation.getByRole("button", { name: "Build watcher running", exact: true }).click();
+  await expect(page.locator(".terminal-pane")).toHaveCount(1);
   await expect(pane(page, "dev", gamma.id).locator(".xterm")).toBeVisible();
-  await expect(pane(page, "dev", alpha.id)).toHaveCount(0);
-  await expect(pane(page, "dev", gamma.id)).toHaveAttribute("data-active", "true");
-  expect(await original!.evaluate((element) => element.isConnected)).toBe(true);
-  expect(fixture.attachments.filter((path) => path === terminalPath("production"))).toHaveLength(1);
-  await expect.poll(() => fixture.activeTerminalPaths().sort()).toEqual([terminalPath("dev", gamma.id), terminalPath("production")].sort());
+  await openNavigation(page);
+  await navigation.getByRole("button", { name: "Open terminal group Development shell", exact: true }).click();
+  await expect(page.locator(".terminal-pane")).toHaveCount(2);
+  await expect.poll(() => fixture.activeTerminalPaths().sort()).toEqual([terminalPath("dev"), terminalPath("production")].sort());
   expect(fixture.mutations).toEqual([]);
 });
 

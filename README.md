@@ -7,6 +7,19 @@ continue when you close the app.
 
 Built with Go, React, and Tauri. Licensed under [Apache 2.0](LICENSE).
 
+Terminal splits are saved as sidebar groups. Open a group to restore its panes,
+or open one member independently without losing the group. Selecting terminal
+text copies it automatically; the Copy button and keyboard shortcuts remain
+available. Agent launch dialogs offer saved conversations and conversation
+names on supported Linux runtimes; see [conversation support](docs/CONVERSATIONS.md).
+
+Mastermind's compact Pages view fits its document to the window. Its managed
+Status page reflects recorded tasks, while the coordinator maintains project
+pages and task updates at work checkpoints. The overview's **Mastermind control**
+panel adds a durable instruction inbox, private Telegram pairing, blocked-task
+diagnosis, and reviewable recovery lessons. See the
+[control guide](docs/CONTROL_CENTER.md) for setup and delivery limits.
+
 ## Desktop app
 
 Relay is a desktop product. The Tauri shell renders the interface using its
@@ -124,6 +137,25 @@ HTML/CSS and embedded images in a restricted sandbox; scripts, external requests
 and app control from a page are disabled. Tasks are maintained by Mastermind or
 the user, separately from provider-native todos and the optional summary observer.
 
+Relay creates a **Status** page automatically when there is space in the
+workspace. Its **Live status** template reflects recorded task counts, current
+work, blockers, next steps, completed records, and the coordinator's connection
+or process state. It makes no model requests and never treats a running process
+as completed work. Existing pages and tasks are preserved. Saving an HTML edit
+turns that template into a regular page; deleting it is permanent across app
+restarts. The complete task board remains available when the status page shows
+only its first 40 records.
+
+New Mastermind sessions are instructed to create or reuse tasks and project
+pages automatically while carrying out your work, update them at meaningful
+milestones, and record evidence before marking tasks done. This runs within the
+coordinator's ordinary conversation and provider permissions. An already-running
+coordinator keeps its original instructions; ask it to keep the board and pages
+current, or start a new coordinator after its current work finishes. Relay does
+not interrupt that session or inject prompts into its terminal. For a separate
+editable project report, `relay workspace template status` prints a responsive,
+theme-aware HTML starter; publish it using the workspace CLI.
+
 Relay saves this choice and reconnects to the same session when the app opens.
 Closing Relay leaves it running. **Settings** lets you change the choice later;
 switching starts a new conversation and preserves the previous session in its
@@ -131,6 +163,15 @@ machine's session list. An exited coordinator is shown as finished until you
 explicitly start a new one. **Pause Mastermind** disconnects its panel and revokes
 its app-control capability; the provider process keeps running. Pages and tasks
 are saved independently of that process and survive controller restarts.
+
+**Move Mastermind** in its Overview prepares a persistent controller on another
+saved Linux machine, transfers its workspace, tasks, lessons and queued
+instructions, stops the exact source coordinator, then starts a fresh destination
+conversation with the saved handoff. Wait for **Hosted on …** before closing the
+source desktop. Provider sign-ins, SSH keys, project files and provider history
+stay on their original machines. Messaging must be configured on the destination.
+See [Mastermind migration](docs/MASTERMIND_MIGRATION.md) for preparation, recovery
+and the current first-handoff boundary.
 
 Startup belongs to the controller, so reloading a view or opening another window
 does not create another agent. Relay records an explicit launch identity before

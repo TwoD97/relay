@@ -56,15 +56,17 @@ func (s *Server) lockedWorkspace(w http.ResponseWriter) (*workspaceStore, bool) 
 }
 
 func (s *Server) getWorkspace(w http.ResponseWriter, _ *http.Request) {
+	mastermind := s.statusMastermind()
 	store, ok := s.lockedWorkspace(w)
 	if !ok {
 		return
 	}
 	defer store.mu.Unlock()
-	writeJSON(w, 200, workspaceState(store.record))
+	writeJSON(w, 200, liveWorkspaceState(store.record, mastermind))
 }
 
 func (s *Server) getWorkspacePage(w http.ResponseWriter, r *http.Request) {
+	mastermind := s.statusMastermind()
 	store, ok := s.lockedWorkspace(w)
 	if !ok {
 		return
@@ -73,6 +75,11 @@ func (s *Server) getWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	for _, page := range store.record.Pages {
 		if page.ID == r.PathValue("id") {
 			page.Revision = store.record.Revision
+			page, err := renderStatusPage(store.record, mastermind, page)
+			if err != nil {
+				writeError(w, 500, "The status page could not be rendered. Saved workspace content is unchanged.")
+				return
+			}
 			writeJSON(w, 200, page)
 			return
 		}
@@ -142,6 +149,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, kind string)
 }
 
 func (s *Server) mutateWorkspace(w http.ResponseWriter, r *http.Request, kind string, create bool) {
+	mastermind := s.statusMastermind()
 	request, err := decodeWorkspaceRequest(w, r, kind)
 	if err != nil {
 		writeError(w, 400, err.Error())
@@ -179,6 +187,10 @@ func (s *Server) mutateWorkspace(w http.ResponseWriter, r *http.Request, kind st
 		return
 	}
 	defer store.mu.Unlock()
+	if store.record.FrozenBy != "" {
+		writeError(w, 409, "This workspace moved to another coordinator. Refresh Relay before editing.")
+		return
+	}
 	if *request.Revision != store.record.Revision {
 		writeError(w, 409, "Workspace changed. Read the current revision before making another change.")
 		return
@@ -281,7 +293,7 @@ func (s *Server) mutateWorkspace(w http.ResponseWriter, r *http.Request, kind st
 		writeError(w, 500, "Workspace save could not be confirmed. Read the current state before retrying; do not repeat an unknown create.")
 		return
 	}
-	response.Workspace = workspaceState(next)
+	response.Workspace = liveWorkspaceState(next, mastermind)
 	code := http.StatusOK
 	if create {
 		code = http.StatusCreated

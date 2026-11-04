@@ -29,6 +29,7 @@ var errControllerRunning = errors.New("a controller already owns this data direc
 type uiOptions struct {
 	Address, StateDir, RuntimeDir, BinaryDir, Executable string
 	Local, LocalMastermind, NoLoginLink                  bool
+	NoLaunch                                             bool // private coordinator preparation never mints a desktop login
 }
 
 type controllerInfo struct {
@@ -109,6 +110,7 @@ func controllerControlHandler(app *controller.Server, info controllerInfo, opts 
 	mux := http.NewServeMux()
 	health := controllerHealth{controllerInfo: info, Local: opts.Local, LocalMastermind: opts.LocalMastermind, RuntimeDir: opts.RuntimeDir, StateDir: opts.StateDir, Executable: opts.Executable}
 	mux.Handle("/agent/", app.AgentHandler())
+	mux.Handle("/coordinator/", app.CoordinatorHandler())
 	var stopping atomic.Bool
 	if len(shutdown) > 0 {
 		health.Handover, health.Instance = 1, rand.Text()
@@ -260,6 +262,9 @@ func readControllerInfo(ctx context.Context, opts uiOptions) (controllerInfo, er
 }
 
 func issueControllerLaunch(ctx context.Context, opts uiOptions, info controllerInfo) (desktopLaunch, error) {
+	if opts.NoLaunch {
+		return desktopLaunch{controllerInfo: info}, nil
+	}
 	var launch desktopLaunch
 	if err := controlRequest(ctx, opts.StateDir, http.MethodPost, "/launch", &launch); err != nil {
 		return desktopLaunch{}, err
@@ -290,6 +295,9 @@ func ensureController(ctx context.Context, opts uiOptions) (desktopLaunch, error
 		defer probe.Close()
 		if probe.health.Version == version {
 			return issueControllerLaunch(ctx, opts, probe.health.controllerInfo)
+		}
+		if opts.NoLaunch {
+			return desktopLaunch{}, errors.New("A different dedicated coordinator version is already active; preserve it and review migration before upgrading")
 		}
 		return upgradeController(ctx, opts, probe)
 	}

@@ -173,7 +173,11 @@ func (c *Connection) remoteHealth(ctx context.Context) (health, error) {
 }
 
 func verifiedArtifact(directory, filename string) (*os.File, string, error) {
-	manifest, err := os.Open(filepath.Join(directory, "SHA256SUMS"))
+	return verifiedArtifactManifest(directory, filename, "SHA256SUMS")
+}
+
+func verifiedArtifactManifest(directory, filename, manifestName string) (*os.File, string, error) {
+	manifest, err := os.Open(filepath.Join(directory, manifestName))
 	if err != nil {
 		return nil, "", fmt.Errorf("open release checksums: %w; build the release bundle first", err)
 	}

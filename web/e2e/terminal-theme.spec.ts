@@ -35,6 +35,7 @@ test("system appearance repaints all ANSI colors without replacing output, selec
   await page.evaluate(() => {
     const state = window as unknown as { copied: string[] };
     state.copied = [];
+    document.execCommand = () => false;
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { state.copied.push(value); } } });
   });
   await page.locator(".terminal-canvas").click();
@@ -71,7 +72,7 @@ test("system appearance repaints all ANSI colors without replacing output, selec
   await expect(page.locator(".xterm-selection > div").first()).toHaveCSS("background-color", "rgb(71, 86, 58)");
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   await page.keyboard.press("Control+c");
-  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["KEEP_ME"]);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(["KEEP_ME", "KEEP_ME"]);
   expect(fixture.terminalMessages).toEqual(before);
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Backspace");

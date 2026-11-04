@@ -10,7 +10,7 @@ RELAY_SOURCE_HASH=$(python3 - <<'PY'
 import hashlib,pathlib
 root=pathlib.Path('.')
 files=[]
-for pattern in ('cmd/**/*.go','internal/**/*.go','internal/**/*.asc','skills/**/*','web/src/**/*','web/dist/**/*','web/embed.go','go.mod','go.sum','web/package.json','web/package-lock.json'):
+for pattern in ('cmd/**/*.go','internal/**/*.go','internal/**/*.asc','skills/**/*','web/src/**/*','web/dist/**/*','web/embed.go','go.mod','go.sum','connectors/whatsapp-personal/**/*.go','connectors/whatsapp-personal/go.mod','connectors/whatsapp-personal/go.sum','web/package.json','web/package-lock.json'):
     files.extend(p for p in root.glob(pattern) if p.is_file())
 h=hashlib.sha256()
 for p in sorted(set(files)):
@@ -18,9 +18,10 @@ for p in sorted(set(files)):
 print(h.hexdigest()[:12])
 PY
 )
-RELAY_VERSION="${RELAY_VERSION:-0.3.4-dev.$RELAY_SOURCE_HASH}"
+RELAY_VERSION="${RELAY_VERSION:-0.4.0-dev.$RELAY_SOURCE_HASH}"
 if [[ ! "$RELAY_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}$ ]]; then echo 'Invalid RELAY_VERSION' >&2; exit 1; fi
 mkdir -p dist
+RELAY_GO="$RELAY_GO" ./scripts/build-whatsapp-personal.sh dist
 for RELAY_ARCH in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$RELAY_ARCH" "$RELAY_GO" build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$RELAY_VERSION" -o "dist/relay-linux-$RELAY_ARCH" ./cmd/relay
 done
@@ -32,8 +33,8 @@ cp scripts/install.sh dist/install.sh
 cp README.md dist/README.md
 cp LICENSE NOTICE THIRD_PARTY_NOTICES.md dist/
 mkdir -p dist/docs
-cp docs/CONTRACT.md docs/VALIDATION.md docs/SHARED_CONTEXT.md docs/ACTIVITY.md dist/docs/
+cp docs/CONTRACT.md docs/VALIDATION.md docs/SHARED_CONTEXT.md docs/ACTIVITY.md docs/CONVERSATIONS.md docs/CONTROL_CENTER.md docs/AGENT-WINDOWS.md docs/WHATSAPP_BUSINESS.md docs/PERSONAL_WHATSAPP.md docs/MASTERMIND_MIGRATION.md dist/docs/
 RELAY_GO="$RELAY_GO" python3 scripts/notices.py
 printf '%s\n' "$RELAY_VERSION" > dist/VERSION
-tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf dist/relay-linux-bundle.tar.gz relay-linux-amd64 relay-linux-arm64 SHA256SUMS VERSION install.sh README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.txt docs
+tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf dist/relay-linux-bundle.tar.gz relay-linux-amd64 relay-linux-arm64 SHA256SUMS VERSION install.sh README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.txt docs SHA256SUMS.whatsapp relay-whatsapp-personal-linux-amd64 relay-whatsapp-personal-linux-arm64 relay-whatsapp-personal-windows-amd64.exe WHATSAPP_PERSONAL_LICENSE.txt WHATSAPP_PERSONAL_NOTICES.txt relay-whatsapp-personal-source.tar.gz
 printf 'Built Relay %s. Runtime and agent CLI bundle ready. Build the desktop app with scripts/build-desktop.sh.\n' "$RELAY_VERSION"

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"github.com/TwoD97/relay/internal/conversations"
 	"net/http"
 	"sort"
 	"strings"
@@ -49,6 +50,7 @@ type approvalWaiter struct {
 }
 
 type approvalHookEvent struct {
+	ConversationID string          `json:"conversationId,omitempty"`
 	Provider       string          `json:"provider"`
 	Event          string          `json:"event"`
 	ToolName       string          `json:"toolName,omitempty"`
@@ -110,6 +112,9 @@ func (s *Server) approvalHook(w http.ResponseWriter, r *http.Request) {
 		p.mu.Unlock()
 		fail(w, 409, errors.New("hook does not match an active configured agent"))
 		return
+	}
+	if conversations.ValidID(event.ConversationID) {
+		p.meta.ConversationID = event.ConversationID
 	}
 	permissions := *p.meta.Permissions
 	permissions.Support = "active"

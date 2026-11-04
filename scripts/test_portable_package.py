@@ -12,7 +12,7 @@ import tempfile
 import unittest
 import zipfile
 
-from package_desktop_windows import BINARIES, RUNTIME_FILES, package
+from package_desktop_windows import BINARIES, RUNTIME_FILES, WHATSAPP_BINARIES, WHATSAPP_FILES, package
 
 
 class PortablePackageTests(unittest.TestCase):
@@ -84,6 +84,25 @@ class PortablePackageTests(unittest.TestCase):
             self.build(replace=True)
         self.assertEqual(self.output.read_bytes(), before)
         self.assertEqual(sidecar.read_bytes(), checksum)
+
+    def test_optional_connector_requires_complete_verified_separate_distribution(self):
+        for name in WHATSAPP_FILES:
+            (self.runtime / name).write_bytes(("connector fixture " + name).encode())
+        manifest = "".join(hashlib.sha256((self.runtime / name).read_bytes()).hexdigest() + "  " + name + "\n" for name in sorted(WHATSAPP_BINARIES))
+        (self.runtime / "SHA256SUMS.whatsapp").write_text(manifest)
+        self.build()
+        with zipfile.ZipFile(self.output) as archive:
+            for name in WHATSAPP_FILES:
+                self.assertEqual(archive.read("Relay/runtime/" + name), (self.runtime / name).read_bytes())
+        before = self.output.read_bytes()
+        (self.runtime / "relay-whatsapp-personal-windows-amd64.exe").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "connector checksum mismatch"):
+            self.build(replace=True)
+        self.assertEqual(self.output.read_bytes(), before)
+        (self.runtime / "WHATSAPP_PERSONAL_LICENSE.txt").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.build(replace=True)
+        self.assertEqual(self.output.read_bytes(), before)
 
     def test_existing_archive_requires_explicit_replacement(self):
         self.output.write_bytes(b"another package")

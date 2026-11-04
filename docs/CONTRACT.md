@@ -313,7 +313,7 @@ its jobs and retains output; work is never automatically replayed. Compatible
 live service builds are reused during app updates.
 
 `GET /api/mastermind/workspace` returns `{revision,updatedAt,pages,tasks}`.
-Page summaries contain `{id,title,updatedAt}`; `GET .../pages/{id}` adds `html`
+Page summaries contain `{id,title,updatedAt,template?}`; `GET .../pages/{id}` adds `html`
 and the current global `revision`. Tasks contain `{id,title,detail,status,
 pageId?,hostId?,sessionId?,updatedAt}`. Status is `todo|doing|blocked|done`.
 Collections accept POST; exact item paths accept PUT or DELETE. Every mutation
@@ -322,6 +322,25 @@ DELETE accepts only revision. Stale revisions and duplicate caller-provided
 create IDs return 409. IDs are 32 lowercase hexadecimal characters. The CLI
 generates a create ID before dispatch, allowing an unknown reply to be checked
 without repeating the mutation.
+
+`template: "status-v1"` identifies the explicitly app-managed live Status page.
+Controller startup seeds it once when workspace capacity allows, preserving
+existing records and advancing the global revision once. A durable seed marker
+prevents a user-deleted template from returning. Its HTML is rendered read-only
+from structured task records and factual Mastermind state, with no model calls,
+terminal inspection, worker creation, or inferred task completion. The summary's
+`updatedAt` follows relevant workspace/coordinator changes so existing clients
+refresh its rendered document; these reads do not advance the CAS revision or
+write to disk. At most 40 task rows are rendered, with counts and an explicit
+link-free notice covering all records. A normal page PUT clears template
+ownership and preserves the submitted HTML as a static user page. Clients cannot
+assign template ownership through POST/PUT. Existing edit/delete CAS checks apply.
+
+`relay workspace template status` exports a standalone HTML starter without
+credentials or an API request. That exported document is static until published
+and edited. The bundled local Mastermind launch instruction and skill require
+task/page bookkeeping at meaningful work checkpoints; existing provider
+conversations are not restarted or sent additional input during an upgrade.
 
 The atomic workspace store permits 16 pages of at most 128 KiB HTML, 200 tasks,
 160-character titles, 4 KiB task details and a 4 MiB total serialized document.

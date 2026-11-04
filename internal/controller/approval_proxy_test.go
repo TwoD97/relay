@@ -20,12 +20,18 @@ func TestApprovalProxyHostIsolationAndBrowserSecurity(t *testing.T) {
 			counter = &second
 		}
 		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			counter.Add(1)
 			for _, header := range []string{"Authorization", "Cookie", "X-Relay-CSRF"} {
 				if r.Header.Get(header) != "" {
 					t.Errorf("forwarded browser secret %s", header)
 				}
 			}
+			// Background peer discovery may read capabilities independently of
+			// this browser request. It must not count as an approval operation.
+			if r.Method == "GET" && r.URL.Path == "/api/health" {
+				writeJSON(w, 200, map[string]any{"protocol": 1, "version": "fixture", "capabilities": map[string]bool{}})
+				return
+			}
+			counter.Add(1)
 			if strings.HasSuffix(r.URL.Path, "/approval-hook") {
 				w.WriteHeader(401)
 				return

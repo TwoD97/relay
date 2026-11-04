@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+type authenticatedCoordinatorKey struct{}
 
 type workspaceAgentCapability struct {
 	Format   int    `json:"format"`
@@ -124,6 +127,10 @@ func (s *Server) WorkspaceAgentAuthorization(next http.Handler) http.Handler {
 				return
 			}
 		}
+		if s.coordinatorDelegated() {
+			writeError(w, 401, "This coordinator capability was revoked for a machine handoff")
+			return
+		}
 		authorization := r.Header.Values("Authorization")
 		if len(authorization) != 1 || !strings.HasPrefix(authorization[0], "Bearer ") || len(authorization[0]) != len("Bearer ")+64 || s.mastermind == nil {
 			writeError(w, 401, "An active Mastermind capability is required")
@@ -139,6 +146,6 @@ func (s *Server) WorkspaceAgentAuthorization(next http.Handler) http.Handler {
 			writeError(w, 401, "An active Mastermind capability is required")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedCoordinatorKey{}, record.Token)))
 	})
 }

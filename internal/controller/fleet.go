@@ -244,6 +244,12 @@ func (p *fleetPublisher) publish() error {
 // The source registry is metadata only. Read failures never trigger a new SSH
 // login, runtime restart, or session mutation.
 func (s *Server) fleetChanged() {
+	if s.peerSync != nil {
+		select {
+		case s.peerSync.wake <- struct{}{}:
+		default:
+		}
+	}
 	if s.fleet != nil {
 		s.fleet.changed()
 	}

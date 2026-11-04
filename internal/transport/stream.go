@@ -19,19 +19,23 @@ const bridgeScript = `exec "$HOME/.local/share/relay/bin/relay" bridge`
 // HTTP transport's bookkeeping only: traffic always reaches the fixed private
 // Relay socket over this authenticated SSH connection, never an arbitrary host.
 func (c *Connection) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" && network != "tcp4" && network != "tcp6" && network != "unix" {
+		return nil, fmt.Errorf("unsupported transport network %q", network)
+	}
+	return c.dialCommand(ctx, bridgeScript)
+}
+
+func (c *Connection) dialCommand(ctx context.Context, script string) (net.Conn, error) {
 	if !c.Ready() {
 		return nil, c.disconnectedError()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if network != "tcp" && network != "tcp4" && network != "tcp6" && network != "unix" {
-		return nil, fmt.Errorf("unsupported transport network %q", network)
-	}
 	processCtx, cancel := context.WithCancel(c.ctx)
 	stopDial := context.AfterFunc(ctx, cancel)
 	defer stopDial()
-	cmd := exec.CommandContext(processCtx, c.sshPath, commandArgs(c.cfg, bridgeScript)...)
+	cmd := exec.CommandContext(processCtx, c.sshPath, commandArgs(c.cfg, script)...)
 	configureProcess(cmd)
 	childIn, input, err := os.Pipe()
 	if err != nil {

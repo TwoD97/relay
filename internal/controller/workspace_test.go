@@ -231,7 +231,7 @@ func TestWorkspaceBrowserRoutesKeepExistingAuthentication(t *testing.T) {
 		t.Fatal("workspace bypassed browser authentication")
 	}
 	login(t, s, client)
-	body := `{"revision":0,"title":"Private page","html":"<script>not executed by the API</script>"}`
+	body := `{"revision":1,"title":"Private page","html":"<script>not executed by the API</script>"}`
 	if got := request(t, client, "POST", server.URL+workspaceAPI+"/pages", body, "", server.URL); got.StatusCode != 403 {
 		t.Fatal("workspace mutation bypassed CSRF")
 	}

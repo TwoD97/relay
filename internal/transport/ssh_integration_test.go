@@ -288,11 +288,13 @@ func TestRealSSH(t *testing.T) {
 		t.Fatal("matching source CLI unnecessarily uploaded a bundle", err)
 	}
 	exerciseSSHProjectContext(t, ctx, second)
+	exerciseSSHConversations(t, ctx, second)
 	cliBinary := filepath.Join(dir, "relay-cli")
 	if err := os.WriteFile(cliBinary, newArtifact, 0700); err != nil {
 		t.Fatal(err)
 	}
 	exerciseSSHCLIAndMaintenance(t, ctx, second, cliBinary, config, port, bundle)
+	second = exerciseSSHCoordinator(t, ctx, second, bundle, connect)
 	if err := os.WriteFile(filepath.Join(bundle, name), []byte("corrupt update"), 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,7 @@ import (
 var harnessNames = map[string]string{"codex": "Codex", "claude": "Claude Code"}
 
 type Harness struct {
+	ConversationResume bool `json:"conversationResume"`
 	// This advertises the runtime API, not a guarantee that the installed CLI
 	// or organization policy permits Auto. Creation checks the actual binary.
 	SessionModes  []string           `json:"sessionModes,omitempty"`
@@ -144,7 +145,7 @@ func (s *Server) inspectHarness(ctx context.Context, id string) Harness {
 	if id == "claude" {
 		strategy = "native"
 	}
-	h := Harness{ID: id, Name: harnessNames[id], SessionModes: []string{"manual", "auto"}, AuthDetail: "Install this harness to continue", Management: &HarnessManagement{SupportedActions: []string{"install", "update", "repair"}, Source: "missing", Strategy: strategy, Detail: "Verified releases are installed alongside existing versions; authentication and running sessions are preserved."}}
+	h := Harness{ConversationResume: true, ID: id, Name: harnessNames[id], SessionModes: []string{"manual", "auto"}, AuthDetail: "Install this harness to continue", Management: &HarnessManagement{SupportedActions: []string{"install", "update", "repair"}, Source: "missing", Strategy: strategy, Detail: "Verified releases are installed alongside existing versions; authentication and running sessions are preserved."}}
 	path, err := s.findCommand(id)
 	if err != nil {
 		return h

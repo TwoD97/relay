@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Columns2, Plus, Search, X } from "lucide-react";
 import { Modal } from "./Modal";
 import { SessionView } from "./Views";
+import { fleetWithoutMaintenance } from "./MaintenanceJobs";
 import { canCreateSessions } from "./runtimeCapabilities";
 import { MAX_TERMINAL_PANES, paneID, terminalPanes } from "./terminalLayout";
 import type { FleetState, Host, Selection, Session, TerminalPaneRef } from "./types";
@@ -58,7 +59,8 @@ export function TerminalWorkspace({ state, selection, onLayout, onActivity, onHo
     if (!items.length) onEmpty(pinned[index].host);
     else onLayout(items, index === active ? Math.min(index, items.length - 1) : active - (index < active ? 1 : 0), expanded);
   };
-  const choices = state.hosts.flatMap((host) => (state.runtimes[host.id]?.sessions ?? [])
+  const pickerState = fleetWithoutMaintenance(state);
+  const choices = pickerState.hosts.flatMap((host) => (pickerState.runtimes[host.id]?.sessions ?? [])
     .filter((session) => !pinned.some((pane, index) => index !== picker && pane.host === host.id && pane.session === session.id))
     .filter((session) => `${host.name} ${session.title} ${session.workspace} ${session.cwd}`.toLowerCase().includes(query.trim().toLowerCase()))
     .map((session) => ({ host, session })));

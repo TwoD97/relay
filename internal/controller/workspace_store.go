@@ -28,6 +28,7 @@ type WorkspacePageSummary struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	Template  string    `json:"template,omitempty"`
 }
 
 type WorkspacePage struct {
@@ -61,11 +62,13 @@ type WorkspaceMutation struct {
 }
 
 type workspaceRecord struct {
-	Format    int             `json:"format"`
-	Revision  uint64          `json:"revision"`
-	UpdatedAt time.Time       `json:"updatedAt"`
-	Pages     []WorkspacePage `json:"pages"`
-	Tasks     []WorkspaceTask `json:"tasks"`
+	FrozenBy             string          `json:"frozenBy,omitempty"`
+	Format               int             `json:"format"`
+	Revision             uint64          `json:"revision"`
+	UpdatedAt            time.Time       `json:"updatedAt"`
+	Pages                []WorkspacePage `json:"pages"`
+	Tasks                []WorkspaceTask `json:"tasks"`
+	StatusTemplateSeeded bool            `json:"statusTemplateSeeded,omitempty"`
 }
 
 type workspaceStore struct {
@@ -161,15 +164,28 @@ func validWorkspaceTask(task WorkspaceTask) bool {
 }
 
 func validateWorkspaceRecord(record workspaceRecord) error {
+	if record.FrozenBy != "" && !validMastermindID(record.FrozenBy) {
+		return errors.New("invalid workspace migration fence")
+	}
 	if record.Format != 1 || record.Revision > maxMastermindRevision || record.UpdatedAt.IsZero() || len(record.Pages) > maxWorkspacePages || len(record.Tasks) > maxWorkspaceTasks {
 		return errors.New("invalid workspace state")
 	}
 	pages, tasks := map[string]bool{}, map[string]bool{}
+	statusPages := 0
 	for _, page := range record.Pages {
 		if !validMastermindID(page.ID) || pages[page.ID] || !validWorkspaceTitle(page.Title) || !validWorkspaceHTML(page.HTML) || page.UpdatedAt.IsZero() || page.Revision > record.Revision {
 			return errors.New("invalid workspace page")
 		}
 		pages[page.ID] = true
+		if page.Template != "" {
+			if page.Template != statusTemplate || !record.StatusTemplateSeeded {
+				return errors.New("invalid workspace template ownership")
+			}
+			statusPages++
+			if statusPages > 1 {
+				return errors.New("duplicate workspace status template")
+			}
+		}
 	}
 	for _, task := range record.Tasks {
 		if !validWorkspaceTask(task) || tasks[task.ID] || task.UpdatedAt.IsZero() || task.PageID != "" && !pages[task.PageID] {

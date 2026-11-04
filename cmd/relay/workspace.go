@@ -10,10 +10,19 @@ import (
 	"os"
 	"unicode/utf8"
 
+	"github.com/TwoD97/relay/internal/workspacestatus"
 	agentskill "github.com/TwoD97/relay/skills"
 )
 
 func workspaceCommand(args []string) error {
+	if len(args) == 2 && args[0] == "template" && args[1] == "status" {
+		html, err := workspacestatus.Starter()
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(os.Stdout, html)
+		return err
+	}
 	if len(args) == 1 && args[0] == "skill" {
 		_, err := io.WriteString(os.Stdout, agentskill.MastermindContent)
 		return err
@@ -27,7 +36,7 @@ func workspaceCommand(args []string) error {
 		return err
 	}
 	if len(args) < 2 || args[0] != "pages" && args[0] != "tasks" {
-		return errors.New("usage: relay workspace show|skill|pages|tasks; pages/tasks: get|create|update|delete --help")
+		return errors.New("usage: relay workspace show|skill|template status|pages|tasks; pages/tasks: get|create|update|delete --help")
 	}
 	collection, action := args[0], args[1]
 	f := flag.NewFlagSet("workspace "+collection+" "+action, flag.ContinueOnError)

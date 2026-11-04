@@ -126,7 +126,7 @@ test("explicit copy uses the actual terminal selection without sending a remote 
   await page.mouse.move(screen.x + 7 * cellWidth + 1, row.y + row.height / 2, { steps: 7 });
   await page.mouse.up();
   await page.keyboard.press("Control+Shift+C");
-  await expect.poll(() => page.evaluate(() => (window as unknown as { copiedTerminalText: string[] }).copiedTerminalText)).toEqual(["COPY_ME"]);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copiedTerminalText: string[] }).copiedTerminalText)).toEqual(["COPY_ME", "COPY_ME"]);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
 });
 

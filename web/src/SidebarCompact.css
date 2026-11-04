@@ -1,6 +1,21 @@
 /* Native chrome supplies the Relay brand; navigation starts with its actions. */
 .sidebar > .sidebar-mobile-header { display: none; }
 .sidebar > .sidebar-main { padding-top: 12px; }
+.terminal-tree-group { min-width: 0; margin: 3px 0 6px; }
+.terminal-group-row { display: flex; align-items: center; min-width: 0; min-height: 31px; border-radius: 5px; }
+.terminal-group-row:hover { background: var(--hover); }
+.terminal-group-row.selected { background: var(--selected); color: var(--accent); }
+.terminal-group-row > .tree-chevron { flex: 0 0 19px; width: 19px; }
+.terminal-group-open { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 5px 0; font-size: 11px; text-align: left; }
+.terminal-group-open > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-group-open > svg { flex: none; }
+.terminal-group-open > small { margin-left: auto; color: var(--muted); font-size: 10px; }
+.terminal-group-remove { display: flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 28px; color: var(--muted); }
+.terminal-group-members { margin: 1px 0 0 10px; padding-left: 7px; border-left: 1px solid var(--line); }
+.terminal-group-members[hidden] { display: none; }
+.terminal-group-members .session-row > span:first-of-type { min-width: 0; flex: 1; }
+.terminal-group-members .session-row small { display: block; font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.orphan-terminal-groups { margin: 12px 6px; }
 @media (max-width: 800px) {
   .sidebar > .sidebar-mobile-header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 7px 12px 0 17px; color: var(--muted); font-size: 11px; }
   .sidebar > .sidebar-main { padding-top: 8px; }

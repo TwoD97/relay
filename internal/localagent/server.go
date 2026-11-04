@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/TwoD97/relay/internal/viewrequests"
 	"io"
 	"net/http"
 	"os"
@@ -57,6 +58,7 @@ type storedSession struct {
 	Process    json.RawMessage `json:"process,omitempty"`
 }
 type Server struct {
+	views                                         *viewrequests.Queue
 	harnessMu                                     sync.Mutex
 	harnessCache                                  []Harness
 	harnessCacheAt                                time.Time
@@ -115,15 +117,17 @@ func New(stateDir, version string) (*Server, error) {
 	return s, nil
 }
 func (s *Server) Health() Health {
-	return Health{Version: s.version, Protocol: Protocol, PID: os.Getpid(), Home: s.home, Hostname: s.hostname, Platform: runtime.GOOS, Capabilities: map[string]bool{"mastermindV1": true, "localMastermindV1": true}}
+	return Health{Version: s.version, Protocol: Protocol, PID: os.Getpid(), Home: s.home, Hostname: s.hostname, Platform: runtime.GOOS, Capabilities: map[string]bool{"mastermindV1": true, "localMastermindV1": true, "viewRequestsV1": true, "sessionStopV1": true}}
 }
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
+	s.registerViews(m)
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, 200, s.Health()) })
 	m.HandleFunc("GET /api/sessions", s.list)
 	m.HandleFunc("POST /api/sessions", s.create)
 	m.HandleFunc("PATCH /api/sessions/{id}", s.patchSession)
 	m.HandleFunc("DELETE /api/sessions/{id}", s.remove)
+	m.HandleFunc("POST /api/sessions/{id}/stop", s.stopSession)
 	m.HandleFunc("GET /api/sessions/{id}/history", s.history)
 	m.HandleFunc("POST /api/sessions/{id}/input", s.input)
 	m.HandleFunc("GET /api/sessions/{id}/terminal", s.terminal)

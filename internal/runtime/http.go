@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TwoD97/relay/internal/conversations"
 	"github.com/gorilla/websocket"
 )
 
@@ -40,7 +41,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "home": s.home, "hostname": s.hostname, "capabilities": map[string]bool{"mastermindV1": true, "localMastermindV1": true}})
+	jsonResponse(w, http.StatusOK, map[string]any{"version": s.version, "protocol": 1, "runtimeId": s.runtimeID, "instanceId": s.instanceID, "home": s.home, "hostname": s.hostname, "capabilities": map[string]bool{"mastermindV1": true, "localMastermindV1": true, "conversationResumeV1": true, "viewRequestsV1": true, "workspaceSyncV1": true, "runtimeRecoveryV1": true, "sessionStopV1": true}})
 }
 func sortSessions(metas []Session) {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].CreatedAt.Before(metas[j].CreatedAt) })
@@ -57,6 +58,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
+	ResumeConversationID  string            `json:"resumeConversationId"`
 	Title                 string            `json:"title"`
 	Workspace             string            `json:"workspace"`
 	Cwd                   string            `json:"cwd"`
@@ -93,6 +95,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validHarness(req.Harness) {
 		fail(w, 400, errors.New("harness must be shell, claude, or codex"))
+		return
+	}
+	if req.ResumeConversationID != "" && (!conversations.ValidID(req.ResumeConversationID) || req.Harness == "shell" || req.MastermindID != "") {
+		fail(w, 400, errors.New("Resume requires a saved Claude Code or Codex conversation UUID on an ordinary agent session"))
 		return
 	}
 	mode, err := normalizedAgentMode(req.Harness, req.AgentMode)
@@ -133,6 +139,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Harness != "shell" {
+		if req.ResumeConversationID != "" {
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			err = s.prepareConversationResume(ctx, req.Harness, path, cwd, req.ResumeConversationID)
+			cancel()
+			if err != nil {
+				fail(w, http.StatusUnprocessableEntity, err)
+				return
+			}
+		}
 		if mode == "auto" {
 			if err = s.validateAutoAgent(r.Context(), req.Harness, path); err != nil {
 				fail(w, http.StatusUnprocessableEntity, err)
@@ -158,11 +173,17 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			args = sessionAgentArguments(req.Harness, mode, req.MastermindID != "", args)
 		}
 	}
+	args = conversationResumeArguments(req.Harness, req.ResumeConversationID, args)
 	if r.Context().Err() != nil {
 		fail(w, http.StatusRequestTimeout, errors.New("Session preparation was cancelled; no session was started"))
 		return
 	}
-	meta, err := s.start(Session{Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, AgentMode: mode, MastermindID: req.MastermindID, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, out io.Writer) (*exec.Cmd, error) {
+	receipt, _ := r.Context().Value(restorationKey{}).(restorationReceipt)
+	var restartSource *RestartSource
+	if receipt.ID != "" {
+		restartSource = &RestartSource{ID: receipt.SourceID, CreatedAt: receipt.SourceCreatedAt}
+	}
+	meta, err := s.start(Session{RestartReceipt: receipt.ID, RestartSource: restartSource, ConversationID: req.ResumeConversationID, ResumedFrom: req.ResumeConversationID, Title: req.Title, Workspace: req.Workspace, Cwd: cwd, Harness: req.Harness, AgentMode: mode, MastermindID: req.MastermindID, Permissions: permissions}, req.Cols, req.Rows, func(_ context.Context, out io.Writer) (*exec.Cmd, error) {
 		if mode == "auto" {
 			_, _ = io.WriteString(out, "Relay Auto: requesting full provider permissions for this session. Provider and organization restrictions still apply; startup errors remain in this terminal.\r\n")
 		}

@@ -11,7 +11,7 @@ purifier.addHook("uponSanitizeAttribute", (_node, attribute) => {
   if (attribute.attrName === "src" && !dataImage.test(attribute.attrValue)) attribute.keepAttr = false;
 });
 
-// Width fitting is a preview choice. Only an unbranched chain of outer
+// Every preview fits its available width. Only an unbranched chain of outer
 // document wrappers is widened; nested card/grid children keep their layout.
 function fitPageShells(clean: string) {
   const template = window.document.createElement("template");
@@ -31,7 +31,7 @@ function fitPageShells(clean: string) {
 
 // Generated pages are documents, never controller code. No script, native IPC,
 // forms, links, embedded browsing contexts, or external asset requests are allowed.
-export function mastermindHTML(html: string, appearance: ResolvedAppearance, fitWidth = false) {
+export function mastermindHTML(html: string, appearance: ResolvedAppearance) {
   if (new TextEncoder().encode(html).length > 128 * 1024) throw new Error("This page exceeds the 128 KiB canvas limit.");
   let clean = purifier.sanitize(html, {
     ALLOWED_TAGS: tags,
@@ -42,7 +42,7 @@ export function mastermindHTML(html: string, appearance: ResolvedAppearance, fit
     FORBID_TAGS: ["script", "iframe", "frame", "frameset", "object", "embed", "base", "meta", "link", "form", "input", "button", "select", "textarea", "a", "svg", "math", "video", "audio", "source"],
     ADD_DATA_URI_TAGS: [],
   });
-  if (fitWidth) clean = fitPageShells(clean);
+  clean = fitPageShells(clean);
   const dark = appearance === "dark";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:${appearance};font:14px/1.6 system-ui,sans-serif;color:${dark ? "#e6eadd" : "#263328"};background:${dark ? "#141a16" : "#fbfcf9"};--scrollbar:${dark ? "#63745a" : "#78896b"};--scrollbar-hover:${dark ? "#7f916f" : "#657a55"};--scrollbar-active:${dark ? "#a0b887" : "#526945"};--scrollbar-track:transparent}body{margin:24px;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid ${dark ? "#394438" : "#d8dfd0"}}pre{white-space:pre-wrap}*{box-sizing:border-box}${scrollbars}</style></head><body${fitWidth ? ' style="width:auto!important;max-width:none!important;min-width:0!important;margin:16px!important"' : ""}>${clean}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:${appearance};font:14px/1.6 system-ui,sans-serif;color:${dark ? "#e6eadd" : "#263328"};background:${dark ? "#141a16" : "#fbfcf9"};--scrollbar:${dark ? "#63745a" : "#78896b"};--scrollbar-hover:${dark ? "#7f916f" : "#657a55"};--scrollbar-active:${dark ? "#a0b887" : "#526945"};--scrollbar-track:transparent}body{margin:24px;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid ${dark ? "#394438" : "#d8dfd0"}}pre{white-space:pre-wrap}*{box-sizing:border-box}${scrollbars}</style></head><body style="width:auto!important;max-width:none!important;min-width:0!important;margin:16px!important">${clean}</body></html>`;
 }

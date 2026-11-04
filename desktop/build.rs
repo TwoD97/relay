@@ -5,6 +5,7 @@ fn main() {
             "appearance",
             "open_session_window",
             "sidebar_attention",
+            "terminal_groups",
         ]),
     ))
     .expect("build desktop assets and restricted frame permissions");

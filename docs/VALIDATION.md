@@ -637,3 +637,35 @@ read-only tests verify API structure layout, cancellation, physical RAM, fixed
 drive capacity, and bounded CPU deltas. Browser coverage verifies loading,
 sampling, partial failures, stale recovery, late host replies, visibility and
 non-overlapping polls at desktop and narrow sizes.
+
+## Workspace, control channels and migration
+
+Saved terminal-group tests cover four-pane bounds, exact session identity,
+standalone navigation without losing a split, native revision conflicts, delayed
+saves, reopening and missing sessions. Clipboard cases cover trusted selection
+copy, keyboard copy/interrupt, explicit copying, fallback clipboard access and
+preservation of the terminal's writer lease. Provider conversation fixtures use
+synthetic histories and literal IDs; no personal conversation data is read.
+
+Control tests exercise durable instruction claims, revoked coordinator tokens,
+long-poll wakeup, bounded recovery, exact approval identities and uncertain
+outcomes. Telegram/Discord/WhatsApp tests use local HTTP fixtures or a synthetic
+linked-device client. The optional personal WhatsApp module has a separate test
+suite and import graph; its packaged source can rebuild all helpers offline.
+Account pairing and message delivery through real external accounts are not
+claimed by these tests.
+
+Migration tests assert source fencing before snapshot transfer, an exact
+record-preserving source stop before destination activation, retained queued
+instructions, no automatic replay after uncertain stops or activation replies,
+and authoritative proxy routing. The disposable SSH gate prepares a real
+private hosted controller, closes and reconnects its SSH transport, and checks
+that the controller identity, workspace and unrelated PTYs survive. A synthetic
+provider verifies activation without inference or provider credentials.
+
+Runtime recovery tests distinguish a resumed provider conversation from a
+restarted process. They preserve original terminal logs, refuse unproven
+conversation identities, and require explicit confirmation of the reviewed
+restore plan. Peer tests exercise two independent controllers against a runtime,
+explicit snapshot import, conflicts and exact host/session remapping; import
+never starts an agent or copies credentials.

@@ -55,7 +55,11 @@ test("task board and sandboxed canvas retain themed native scrolling", async ({ 
   await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Pages", exact: true }).click();
   const frame = page.frameLocator('iframe[title="Long plan canvas"]');
   for (const mode of ["light", "dark"] as const) {
+    // Pages intentionally uses the whole content area. Change appearance from
+    // the overview, then return to the same page through normal navigation.
+    await page.getByRole("button", { name: "Back to Mastermind overview", exact: true }).click();
     await page.getByLabel("Appearance", { exact: true }).selectOption(mode);
+    await page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Pages", exact: true }).click();
     await expect(frame.locator("html")).toHaveCSS("scrollbar-color", color(mode));
     await expect(page.locator('iframe[title="Long plan canvas"]')).toHaveAttribute("sandbox", "");
     await frame.locator("body").evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));

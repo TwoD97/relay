@@ -6,6 +6,11 @@ const now = "2026-11-03T08:00:00Z";
 const pageId = "a".repeat(32);
 const coordinator: Session = { ...work, id: "coordinator", title: "Mastermind", harness: "codex", agentMode: "manual", mastermindId: "c".repeat(32) };
 const navigation = (page: Page) => page.getByRole("navigation", { name: "Mastermind views", exact: true });
+async function goView(page: Page, view: string) {
+  const back = page.getByRole("button", { name: "Back to Mastermind overview", exact: true });
+  if (await back.isVisible()) await back.click();
+  await navigation(page).getByRole("button", { name: view, exact: true }).click();
+}
 async function fixtureFor(page: Page) {
   const pages: MastermindPage[] = [{ id: pageId, title: "Release plan", html: "<h1>Ready for review</h1><p>A page with space for the whole plan.</p>", updatedAt: now, revision: 1 }];
   const tasks: MastermindTask[] = [
@@ -20,7 +25,8 @@ async function fixtureFor(page: Page) {
 }
 
 async function onlyView(page: Page, view: "Overview" | "Pages" | "Tasks" | "Terminal") {
-  await expect(navigation(page).getByRole("button", { name: view, exact: true })).toHaveAttribute("aria-current", "page");
+  if (view === "Pages") await expect(page.getByRole("toolbar", { name: "Page controls" })).toBeVisible();
+  else await expect(navigation(page).getByRole("button", { name: view, exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("region", { name: "Mastermind pages", exact: true })).toHaveCount(view === "Pages" ? 1 : 0);
   await expect(page.getByRole("region", { name: "Mastermind tasks", exact: true })).toHaveCount(view === "Tasks" ? 1 : 0);
   await expect(page.getByRole("region", { name: "Mastermind terminal", exact: true })).toHaveCount(view === "Terminal" ? 1 : 0);
@@ -44,7 +50,7 @@ test("overview and dedicated views detach only the viewer and preserve the runni
   await page.getByRole("button", { name: "View all pages", exact: true }).click();
   await onlyView(page, "Pages");
   await expect(page.frameLocator('iframe[title="Release plan canvas"]').getByRole("heading", { name: "Ready for review" })).toBeVisible();
-  await navigation(page).getByRole("button", { name: "Tasks", exact: true }).click();
+  await goView(page, "Tasks");
   await onlyView(page, "Tasks");
   expect(fixture.attachments).toEqual([]);
   await page.getByRole("button", { name: "Open terminal", exact: true }).click();
@@ -52,7 +58,7 @@ test("overview and dedicated views detach only the viewer and preserve the runni
   await page.getByRole("button", { name: "Take control", exact: true }).click();
   await expect(page.getByText("Controlling", { exact: true })).toBeVisible();
   const original = await page.locator(".xterm").elementHandle();
-  await navigation(page).getByRole("button", { name: "Overview", exact: true }).click();
+  await goView(page, "Overview");
   await onlyView(page, "Overview");
   expect(await original!.evaluate((element) => element.isConnected)).toBe(false);
   expect(fixture.sessions.dev).toEqual([coordinator]);
@@ -104,11 +110,11 @@ for (const appearance of ["light", "dark"] as const) test(`separate Mastermind v
   await page.goto("/#mastermind");
   await page.getByLabel("Appearance", { exact: true }).selectOption(appearance);
   for (const view of ["Overview", "Pages", "Tasks", "Terminal"] as const) {
-    await navigation(page).getByRole("button", { name: view, exact: true }).click();
+    await goView(page, view);
     await onlyView(page, view);
     await expect.poll(() => page.locator(".mastermind-workspace").evaluate((element) => {
       const box = element.getBoundingClientRect();
-      const nav = element.querySelector(".workspace-view-navigation")!.getBoundingClientRect();
+      const nav = element.querySelector(".workspace-view-navigation, .canvas-page-actions")!.getBoundingClientRect();
       return { inside: box.left >= -1 && box.right <= innerWidth + 1, navigation: nav.left >= -1 && nav.right <= innerWidth + 1, document: document.documentElement.scrollWidth <= innerWidth + 1 };
     })).toEqual({ inside: true, navigation: true, document: true });
     if (view === "Pages") {

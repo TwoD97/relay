@@ -22,6 +22,7 @@ import (
 )
 
 type Config struct {
+	EnsureLocalRuntime                                 func(context.Context) error
 	EnsureLocalAgent                                   func(context.Context) error
 	StateDir, BinaryDir, Version, Address, LocalSocket string
 	LocalAgentDir, LocalAgentError                     string
@@ -37,6 +38,16 @@ type link struct {
 }
 
 type Server struct {
+	migration                       *migrationStore
+	coordinator                     *coordinatorStore
+	peerSync                        *peerSync
+	restarts                        *runtimeRestartStore
+	control                         *controlStore
+	telegram                        *telegramStore
+	discord                         *discordStore
+	personalWhatsApp                *personalWhatsAppStore
+	whatsappBusiness                *whatsappBusinessStore
+	controlWG                       sync.WaitGroup
 	stats                           map[string]*statsEntry
 	statsSlots                      chan struct{}
 	statsTimeout                    time.Duration
@@ -97,8 +108,18 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{imageSlots: make(chan struct{}, 2), localAgentError: cfg.LocalAgentError, config: cfg, store: store, ctx: ctx, cancel: cancel, links: map[string]*link{}, port: port, launchToken: randomID(), sessionToken: randomID(), csrf: randomID(), directorySlots: make(chan struct{}, 4)}
 	s.stats, s.statsSlots, s.statsTimeout, s.statsCollector = map[string]*statsEntry{}, make(chan struct{}, 4), 6*time.Second, collectMachineStats
 	s.maintenance = maintenance
+	s.restarts = openRuntimeRestarts(cfg.StateDir)
+	s.migration = openMigrationStore(cfg.StateDir)
+	s.coordinator = openCoordinatorStore(cfg.StateDir)
+	s.control = openControlStore(cfg.StateDir)
+	s.telegram = openTelegramStore(cfg.StateDir)
+	s.discord = openDiscordStore(cfg.StateDir)
+	s.personalWhatsApp = openPersonalWhatsAppStore(cfg.StateDir)
+	s.personalWhatsApp.bundleDir = cfg.BinaryDir
+	s.whatsappBusiness = openWhatsAppBusinessStore(cfg.StateDir)
 	s.mastermind, s.mastermindWake = mastermind, make(chan struct{}, 1)
 	_ = s.initializeWorkspace()
+	_ = s.ensureStatusTemplate()
 	if s.hasLocalMastermind() {
 		_ = s.initializeMastermindProject()
 	}
@@ -107,6 +128,7 @@ func New(cfg Config) (*Server, error) {
 		cancel()
 		return nil, err
 	}
+	s.initializePeerSync()
 	s.connectSlots = make(chan struct{}, 4)
 	s.repairSlots = make(chan struct{}, 2)
 	s.startConnection = cfg.startConnection
@@ -130,8 +152,16 @@ func New(cfg Config) (*Server, error) {
 		writeJSON(w, 200, map[string]any{"csrf": s.csrf, "version": cfg.Version})
 	})
 	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("GET /api/peer-sync", s.getPeerSync)
+	mux.HandleFunc("POST /api/peer-sync/groups", s.publishPeerGroups)
+	mux.HandleFunc("POST /api/peer-sync/import", s.importPeerSync)
 	s.RegisterWorkspaceRoutes(mux)
+	s.RegisterControlRoutes(mux)
+	s.RegisterSkillRoutes(mux)
 	mux.HandleFunc("GET /api/mastermind", s.getMastermind)
+	mux.HandleFunc("GET /api/mastermind/migration", s.getMigration)
+	mux.HandleFunc("POST /api/mastermind/migration/preflight", s.preflightMigration)
+	mux.HandleFunc("POST /api/mastermind/migration/start", s.startMigration)
 	mux.HandleFunc("POST /api/mastermind/config", s.configureMastermind)
 	mux.HandleFunc("POST /api/mastermind/start", s.startMastermind)
 	mux.HandleFunc("POST /api/mastermind/disable", s.disableMastermind)
@@ -140,11 +170,17 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/hosts/{id}/connect", s.connectHost)
 	mux.HandleFunc("POST /api/hosts/{id}/disconnect", s.disconnectHost)
 	mux.HandleFunc("POST /api/hosts/{id}/repair-runtime", s.repairRuntime)
+	mux.HandleFunc("GET /api/hosts/{id}/recovery/preflight", s.runtimeRestartPreflight)
+	mux.HandleFunc("GET /api/hosts/{id}/recovery", s.runtimeRestartStatus)
+	mux.HandleFunc("POST /api/hosts/{id}/recovery/start", s.startRuntimeRestart)
+	mux.HandleFunc("POST /api/hosts/{id}/recovery/review", s.reviewRuntimeRestart)
 	mux.HandleFunc("POST /api/hosts/{id}/project-context", s.prepareProjectContext)
 	mux.HandleFunc("POST /api/hosts/{id}/harnesses/{harness}/{action}", s.maintainHostHarness)
 	mux.HandleFunc("DELETE /api/hosts/{id}", s.forgetHost)
 	mux.HandleFunc("GET /api/hosts/{id}/setup-terminal", s.setupTerminal)
 	mux.HandleFunc("GET /api/hosts/{id}/directories", s.directories)
+	mux.HandleFunc("GET /api/hosts/{id}/conversations", s.hostConversations)
+	mux.HandleFunc("PATCH /api/hosts/{id}/conversations/{conversation}", s.hostConversations)
 	mux.HandleFunc("GET /api/hosts/{id}/stats", s.machineStats)
 	mux.HandleFunc("POST /api/hosts/{id}/sessions/{session}/images", s.uploadImage)
 	mux.HandleFunc("/api/hosts/{id}/runtime/{route...}", s.runtimeProxy)
@@ -165,14 +201,21 @@ func New(cfg Config) (*Server, error) {
 			files.ServeHTTP(w, r)
 		})
 	}
-	s.handler = s.secure(s.audit(mux))
+	s.handler = s.secure(s.audit(s.routeCoordinator(mux)))
 	go s.fleet.loop()
+	go s.peerLoop()
 	s.fleetChanged()
 	s.ReconnectSaved()
 	s.maintenanceWG.Add(1)
 	go s.monitorMaintenance()
 	s.mastermindWG.Add(1)
 	go s.monitorMastermind()
+	s.controlWG.Add(5)
+	go s.monitorControl()
+	go s.monitorTelegram()
+	go s.monitorDiscord()
+	go s.monitorPersonalWhatsApp()
+	go s.monitorWhatsAppBusiness()
 	return s, nil
 }
 
@@ -200,6 +243,10 @@ func (s *Server) Close() error {
 	s.connectWG.Wait()
 	s.maintenanceWG.Wait()
 	s.mastermindWG.Wait()
+	s.controlWG.Wait()
+	if s.peerSync != nil {
+		<-s.peerSync.done
+	}
 	if s.fleet != nil {
 		<-s.fleet.done
 	}

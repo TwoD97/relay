@@ -16,9 +16,15 @@ function running() {
 }
 async function workspace(page: Page, view: "overview" | "pages" | "tasks" | "terminal" = "pages") {
   await page.goto(view === "overview" ? "/#mastermind" : `/#mastermind/${view}`);
-  await expect(page.getByRole("heading", { name: view === "pages" ? "Pages" : "Mastermind", exact: true, level: 1 })).toBeVisible();
+  if (view === "pages") await expect(page.getByRole("toolbar", { name: "Page controls" })).toBeVisible();
+  else await expect(page.getByRole("heading", { name: "Mastermind", exact: true, level: 1 })).toBeVisible();
 }
 const views = (page: Page) => page.getByRole("navigation", { name: "Mastermind views", exact: true });
+async function goView(page: Page, view: string) {
+  const back = page.getByRole("button", { name: "Back to Mastermind overview", exact: true });
+  if (await back.isVisible()) await back.click();
+  await views(page).getByRole("button", { name: view, exact: true }).click();
+}
 
 test("canvas pages and task changes share revisions without sending terminal commands", async ({ page }) => {
   const fixture = await mockFleet(page, { ...initial(), ...running() });
@@ -27,7 +33,7 @@ test("canvas pages and task changes share revisions without sending terminal com
   await expect(page.locator(".xterm")).toHaveCount(0);
   expect(fixture.attachments).toEqual([]);
   await page.screenshot({ path: test.info().outputPath("mastermind-workspace.png"), fullPage: true });
-  await views(page).getByRole("button", { name: "Tasks", exact: true }).click();
+  await goView(page, "Tasks");
   await page.getByRole("button", { name: "New task", exact: true }).click();
   const task = page.getByRole("dialog", { name: "New task", exact: true });
   await task.getByLabel("Task title", { exact: true }).fill("Verify release");
@@ -42,17 +48,17 @@ test("canvas pages and task changes share revisions without sending terminal com
   await expect.poll(() => fixture.workspace.tasks[0]?.status).toBe("doing");
   expect(fixture.mutations[1].body).toMatchObject({ revision: 3, title: "Verify release", detail: "Check the rollback plan before shipping.", status: "doing", pageId: id1 });
   expect(fixture.mutations[1].body).not.toHaveProperty("updatedAt");
-  await views(page).getByRole("button", { name: "Pages", exact: true }).click();
-  await page.getByRole("tab", { name: "Architecture", exact: true }).click();
+  await goView(page, "Pages");
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(id2);
   await expect(page.frameLocator('iframe[title="Architecture canvas"]').getByRole("heading", { name: "System map" })).toBeVisible();
-  await page.getByRole("tab", { name: "Architecture", exact: true }).press("ArrowLeft");
-  await expect(page.getByRole("tab", { name: "Plan", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(id1);
+  await expect(page.getByLabel("Canvas page", { exact: true })).toHaveValue(id1);
   await expect(page.locator(".xterm")).toHaveCount(0);
   expect(fixture.attachments).toEqual([]);
   expect(fixture.terminalMessages.filter((message) => message.type === "input")).toEqual([]);
   await page.getByRole("button", { name: "Delete canvas page", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete page", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Plan", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("option", { name: "Plan", exact: true })).toHaveCount(0);
   expect(fixture.workspace.tasks[0].pageId).toBeUndefined();
   expect(fixture.sessions.dev).toHaveLength(1);
 });
@@ -114,9 +120,9 @@ test("unknown workspace write is not replayed after navigation or reload", async
   await page.getByRole("button", { name: "Save task", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("has not been repeated");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await views(page).getByRole("button", { name: "Pages", exact: true }).click();
+  await goView(page, "Pages");
   await expect(page.getByRole("button", { name: "New page", exact: true })).toBeDisabled();
-  await views(page).getByRole("button", { name: "Tasks", exact: true }).click();
+  await goView(page, "Tasks");
   await page.reload();
   await expect(page.getByText("The previous change is unconfirmed.", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "New task", exact: true })).toBeDisabled();
@@ -165,7 +171,7 @@ test("native terminal window requests are scoped and a rejected request has no b
   await page.addInitScript(() => {
     const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> }; nativeRequests: unknown[]; browserRequests: unknown[] };
     target.nativeRequests = []; target.browserRequests = [];
-    target.__TAURI_INTERNALS__ = { invoke: async (command, args) => { if (command === "appearance") return { preference: "system", resolved: "light" }; if (command === "sidebar_attention") return { collapsed: false }; target.nativeRequests.push({ command, args }); throw new Error("Native window outcome unavailable"); } };
+    target.__TAURI_INTERNALS__ = { invoke: async (command, args) => { if (command === "appearance") return { preference: "system", resolved: "light" }; if (command === "sidebar_attention") return { collapsed: false }; if (command === "terminal_groups") return { revision: 0, groups: [] }; target.nativeRequests.push({ command, args }); throw new Error("Native window outcome unavailable"); } };
     window.open = (...args) => { target.browserRequests.push(args); return null; };
   });
   const fixture = await mockFleet(page);
@@ -214,11 +220,11 @@ test("a late page read cannot replace the selected page or attach a terminal", a
   await page.route(`**/api/mastermind/workspace/pages/${id1}`, async (route) => { requested = true; await paused; await route.fulfill({ json: fixture.pages[0] }).catch(() => {}); });
   await workspace(page);
   await expect.poll(() => requested).toBe(true);
-  await page.getByRole("tab", { name: "Architecture", exact: true }).click();
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(id2);
   await expect(page.frameLocator('iframe[title="Architecture canvas"]').getByRole("heading", { name: "System map" })).toBeVisible();
   await expect.poll(() => cancelled).toBe(true);
   release();
-  await expect(page.getByRole("tab", { name: "Architecture", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Canvas page", { exact: true })).toHaveValue(id2);
   await expect(page.locator('iframe[title="Plan canvas"]')).toHaveCount(0);
   expect(fixture.attachments).toEqual([]);
   expect(fixture.mutations).toEqual([]);
@@ -267,10 +273,10 @@ test("a late page save cannot reopen its editor or steal a changed page selectio
   await page.getByRole("button", { name: "Save page", exact: true }).click();
   await expect.poll(() => requested).toBe(true);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByRole("tab", { name: "Architecture", exact: true }).click();
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(id2);
   release();
-  await expect(page.getByRole("tab", { name: "Delayed", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Architecture", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("option", { name: "Delayed", exact: true })).toHaveCount(1);
+  await expect(page.getByLabel("Canvas page", { exact: true })).toHaveValue(id2);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 

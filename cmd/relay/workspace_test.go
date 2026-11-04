@@ -88,7 +88,7 @@ func TestWorkspaceCLIUsesPrivateControllerAndPreservesRevisionConflicts(t *testi
 		}
 		return value
 	}
-	if got := call("show"); got["revision"] != float64(0) {
+	if got := call("show"); got["revision"] != float64(1) || len(got["pages"].([]any)) != 1 || got["pages"].([]any)[0].(map[string]any)["template"] != "status-v1" {
 		t.Fatal("unexpected initial revision")
 	}
 	file := filepath.Join(dir, "plan with spaces.html")
@@ -96,26 +96,26 @@ func TestWorkspaceCLIUsesPrivateControllerAndPreservesRevisionConflicts(t *testi
 	if err := os.WriteFile(file, []byte(html), 0600); err != nil {
 		t.Fatal(err)
 	}
-	created := call("pages", "create", "--revision", "0", "--title", "Plan", "--html-file", file)
+	created := call("pages", "create", "--revision", "1", "--title", "Plan", "--html-file", file)
 	pageID := created["page"].(map[string]any)["id"].(string)
 	if !agentID(pageID) || call("pages", "get", "--id", pageID)["html"] != html {
 		t.Fatal("page content changed")
 	}
-	if _, err := captureAgentCLI(t, workspaceCommand, "tasks", "create", "--revision", "0", "--title", "stale"); err == nil || !strings.Contains(err.Error(), "changed") {
+	if _, err := captureAgentCLI(t, workspaceCommand, "tasks", "create", "--revision", "1", "--title", "stale"); err == nil || !strings.Contains(err.Error(), "changed") {
 		t.Fatal("stale CLI write was not rejected", err)
 	}
-	task := call("tasks", "create", "--revision", "1", "--title", "Inspect", "--status", "doing", "--page", pageID)["task"].(map[string]any)
+	task := call("tasks", "create", "--revision", "2", "--title", "Inspect", "--status", "doing", "--page", pageID)["task"].(map[string]any)
 	taskID := task["id"].(string)
 	if task["status"] != "doing" || task["pageId"] != pageID {
 		t.Fatal("task links/status changed")
 	}
-	call("tasks", "update", "--revision", "2", "--id", taskID, "--title", "Inspected", "--status", "done", "--detail", "Verified test result")
+	call("tasks", "update", "--revision", "3", "--id", taskID, "--title", "Inspected", "--status", "done", "--detail", "Verified test result")
 	if call("tasks", "get", "--id", taskID)["status"] != "done" {
 		t.Fatal("task update missing")
 	}
-	call("pages", "delete", "--revision", "3", "--id", pageID)
-	call("tasks", "delete", "--revision", "4", "--id", taskID)
-	if got := call("show"); got["revision"] != float64(5) {
+	call("pages", "delete", "--revision", "4", "--id", pageID)
+	call("tasks", "delete", "--revision", "5", "--id", taskID)
+	if got := call("show"); got["revision"] != float64(6) {
 		t.Fatal("write sequence did not persist")
 	}
 	// The capability authorizes the agent allowlist, not browser bootstrap.
@@ -126,6 +126,15 @@ func TestWorkspaceCLIUsesPrivateControllerAndPreservesRevisionConflicts(t *testi
 		if _, err := captureAgentCLI(t, workspaceCommand, args...); err == nil {
 			t.Fatal("invalid CLI options accepted", args)
 		}
+	}
+}
+
+func TestWorkspaceStatusTemplateExportRequiresNoAgentCredential(t *testing.T) {
+	t.Setenv("RELAY_CONTROLLER_STATE", "")
+	t.Setenv("RELAY_AGENT_CAPABILITY_FILE", "")
+	data, err := captureAgentCLI(t, workspaceCommand, "template", "status")
+	if err != nil || !strings.Contains(string(data), "Project status template") || !strings.Contains(string(data), "Current work") || strings.Contains(string(data), "updates automatically") {
+		t.Fatal("standalone template export failed or claimed live data", err)
 	}
 }
 

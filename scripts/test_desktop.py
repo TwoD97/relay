@@ -206,6 +206,11 @@ class WebDriver:
         require(state.get("preference") in ("system", "light", "dark") and state.get("resolved") in ("light", "dark"), "Invalid native appearance state")
         return state
 
+    def terminal_groups(self):
+        response = self.async_script("const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('terminal_groups').then(value=>done({ok:true,value}),error=>done({ok:false,error:String(error)}));")
+        require(response.get('ok') is True, 'Native terminal group IPC failed')
+        return response['value']
+
     def check_appearance_views(self, state):
         current = self.call("GET", "/window")
         seen = set()
@@ -328,10 +333,15 @@ class WebDriver:
 
     def select_mastermind_view(self, section):
         require(section in ("Overview", "Pages", "Tasks", "Terminal"), "Unknown test-owned Mastermind section")
+        if self.script("return Boolean(document.querySelector('[aria-label=\"Back to Mastermind overview\"]'));"):
+            self.click_css('[aria-label="Back to Mastermind overview"]')
         wait_for(lambda: self.script('return [...document.querySelectorAll(".workspace-view-navigation button > span")].some(label=>label.textContent===arguments[0]);', section), "Mastermind section navigation is ready")
         element = self.find("xpath", f"//nav[@aria-label='Mastermind views']/button[span[normalize-space(.)='{section}']]")
         self.call("POST", f"/element/{element}/click", {})
-        wait_for(lambda: self.script('return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];', section), "Mastermind " + section + " view")
+        if section == 'Pages':
+            wait_for(lambda: self.script("return Boolean(document.querySelector('[aria-label=\"Canvas page\"]'));"), 'compact native pages view')
+        else:
+            wait_for(lambda: self.script('return document.querySelector(".workspace-view-navigation button[aria-current=page] > span")?.textContent===arguments[0];', section), "Mastermind " + section + " view")
 
     def fill(self, selector, text, using="css selector"):
         element = self.find(using, selector)
@@ -396,10 +406,11 @@ class WebDriver:
             {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0},
         ]}]})
         wait_for(lambda: self.script("return document.querySelector('[aria-label=\"Copy terminal selection\"]')?.disabled===false;"), "terminal text selection")
+        wait_for(lambda: self.async_script("const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));") == "RELAY_COPY_ME", "native selection auto-copies before any shortcut")
         self.terminal_keys("\ue009c\ue000")
         text = self.async_script("const done=arguments[arguments.length-1];navigator.clipboard.readText().then(done,()=>done(null));")
         require(text == "RELAY_COPY_ME", "Ctrl+C did not copy the selected native terminal text")
-        print("PASS: native text clipboard, Ctrl+V paste and Ctrl+C selection copy", flush=True)
+        print("PASS: native text clipboard, selection auto-copy, Ctrl+V paste and Ctrl+C selection copy", flush=True)
 
     def check_terminal_image_clipboard(self, state, second, session, artifacts):
         # This method runs only inside the test's private Xvfb display. It never
@@ -694,9 +705,9 @@ def check_canvas_layout(browser, second, page_id, artifacts):
     saved = second.json(page_path)
     workspace = second.json('/api/mastermind/workspace')
     route = '#mastermind/pages/' + page_id
-    browser.click_css(f'[role="tab"][id="canvas-tab-{page_id}"]')
+    require(browser.script('return document.querySelector(".canvas-page-select")?.value;') == page_id, "Native canvas selector lost its page identity")
     wait_for(lambda: browser.script('return location.hash;') == route, 'selected native canvas has its own route')
-    require(browser.script('return document.querySelector(".canvas-fit-width")?.getAttribute("aria-pressed");') == 'false', 'Canvas unexpectedly opted into width fitting')
+    require(browser.script('return !document.querySelector(".canvas-fit-width,.workspace-view-navigation,.workspace-heading");'), "Page view retained obsolete layout controls")
     require(browser.script('return !document.querySelector(".mastermind,.terminal-shell");'), 'Pages retained coordinator setup or an interactive terminal')
 
     def frame_widths():
@@ -708,23 +719,23 @@ def check_canvas_layout(browser, second, page_id, artifacts):
             browser.call('POST', '/frame', {'id': None})
 
     initial = wait_for(frame_widths, 'native fixed-width authored document renders')
-    require(abs(initial['outer'] - 420) < 1 and abs(initial['card'] - 120) < 1, 'Preview changed authored widths before opt-in')
+    require(abs(initial['outer'] - (initial['viewport'] - 32)) < 2 and abs(initial['card'] - 120) < 1, 'Auto-fit did not fill outer width or changed the nested card')
     browser.script('''
         window.relayCanvasMutations=[];
         const original=window.fetch;
         window.relayRestoreCanvasFetch=()=>{window.fetch=original;delete window.relayRestoreCanvasFetch;};
         window.fetch=function(input,init){
             const method=(init?.method||(input instanceof Request?input.method:'GET')).toUpperCase();
-            if(method!=='GET'&&method!=='HEAD')window.relayCanvasMutations.push(method);
+            if(method!=='GET'&&method!=='HEAD') {
+                const url=new URL(input instanceof Request?input.url:String(input),location.href);
+                window.relayCanvasMutations.push({method,path:url.pathname,api:url.origin===location.origin&&url.pathname.startsWith('/api/')});
+            }
             return Reflect.apply(original,this,arguments);
         };
         window.relayNativeCanvas=document.querySelector('.canvas-document iframe');
     ''')
     try:
-        browser.click_css('[aria-label="Fit page width"]')
-        wait_for(lambda: browser.script('return document.querySelector(".canvas-fit-width")?.getAttribute("aria-pressed");') == 'true', 'native page width fitting enabled')
-        fitted = wait_for(lambda: (lambda size: size if size and size['outer'] > initial['outer'] + 100 else None)(frame_widths()), 'fitted native wrapper uses available preview width')
-        require(abs(fitted['card'] - 120) < 1 and abs(fitted['outer'] - (fitted['viewport'] - 32)) < 2, 'Fit changed nested card width or failed to fill the outer page')
+        fitted = initial
         browser.click_css('[aria-label="Expand page to full window"]')
         wait_for(lambda: browser.script('return location.hash;') == route + '/window', 'expanded page keeps its exact page route')
         def expanded_geometry():
@@ -742,11 +753,12 @@ def check_canvas_layout(browser, second, page_id, artifacts):
         browser.screenshot(artifacts / 'native-mastermind-page-expanded.png')
         browser.click_css('[aria-label="Restore page layout"]')
         wait_for(lambda: browser.script('return location.hash;') == route, 'native page restore keeps the selected page')
-        require(browser.script('return document.querySelector(".workspace-page-navigation").getBoundingClientRect().width>0&&document.querySelector(".workspace-view-navigation").getBoundingClientRect().height>0;'), 'Restore did not return normal page navigation')
-        browser.click_css('[aria-label="Fit page width"]')
-        restored = wait_for(lambda: (lambda size: size if size and abs(size['outer'] - 420) < 1 else None)(frame_widths()), 'turning Fit off restores authored width')
-        require(abs(restored['card'] - 120) < 1, 'Turning Fit off altered the nested card')
-        require(browser.script('return window.relayCanvasMutations.length;') == 0, 'Canvas preview controls issued an API mutation')
+        require(browser.script('return document.querySelector(".canvas-page-select").getBoundingClientRect().width>0&&!document.querySelector(".workspace-view-navigation,.workspace-heading");'), 'Restore did not return compact page controls')
+        restored = wait_for(frame_widths, 'restored page stays fitted')
+        require(abs(restored['outer'] - (restored['viewport'] - 32)) < 2 and abs(restored['card'] - 120) < 1, 'Restored canvas lost automatic width fit')
+        calls = browser.script('return window.relayCanvasMutations;')
+        (artifacts / 'native-canvas-calls.json').write_text(json.dumps(calls, indent=2) + '\n')
+        require(not any(call['api'] for call in calls), 'Canvas preview controls issued an API mutation: ' + json.dumps(calls))
         require(second.json(page_path) == saved and second.json('/api/mastermind/workspace') == workspace, 'Canvas preview controls changed saved HTML or workspace metadata')
         (artifacts / 'native-mastermind-page-layout.json').write_text(json.dumps({'authored': initial, 'fitted': fitted, 'expanded': geometry, 'restored': restored, 'savedHTMLUnchanged': True, 'apiMutations': 0}, indent=2) + '\n')
         print('PASS: native HTML page expands without remounting, fits only outer width, preserves sandbox and makes no saved-page changes', flush=True)
@@ -776,15 +788,18 @@ def check_local_mastermind(browser, second, state, artifacts):
     require(cols > 40, 'Wide Mastermind panel still renders a tiny terminal grid')
     fixture_html = '<main class="native-page-width" style="width:420px;max-width:420px;margin:0 auto"><h1>Native canvas proof</h1><p>Published from the local coordinator.</p><aside class="native-card-width" style="width:120px">Nested card</aside><div style="height:1800px"></div><p>End of native canvas proof</p></main>'
     browser.terminal_command("printf '%s' " + shlex.quote(fixture_html) + ' > native-plan.html')
-    browser.terminal_command('"$RELAY_BIN" workspace pages create --revision 0 --title "Native plan" --html-file native-plan.html')
-    workspace = wait_for(lambda: (lambda record: record if record.get('revision') == 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
-    browser.terminal_command('"$RELAY_BIN" workspace tasks create --revision 1 --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
-    wait_for(lambda: second.json('/api/mastermind/workspace').get('revision') == 2, 'agent CLI publishes task')
+    revision = second.json('/api/mastermind/workspace')['revision']
+    browser.terminal_command(f'"$RELAY_BIN" workspace pages create --revision {revision} --title "Native plan" --html-file native-plan.html')
+    workspace = wait_for(lambda: (lambda record: record if record.get('revision') == revision + 1 else None)(second.json('/api/mastermind/workspace')), 'agent CLI publishes HTML page')
+    browser.terminal_command(f'"$RELAY_BIN" workspace tasks create --revision {workspace["revision"]} --title "Verify native terminal" --status done --detail "Real PTY and maximum whole-row geometry passed"')
+    wait_for(lambda: second.json('/api/mastermind/workspace').get('revision') == revision + 2, 'agent CLI publishes task')
     browser.terminal_command("printf 'RELAY_%s\\n' 'MASTERMIND_VIEW_RETURN'")
     wait_for(lambda: browser.terminal_contains('RELAY_MASTERMIND_VIEW_RETURN'), 'coordinator marker before changing views')
     browser.select_mastermind_view('Pages')
     require(browser.script('return !document.querySelector(".terminal-shell");'), 'Pages view unexpectedly retained an interactive terminal')
-    wait_for(lambda: browser.script("return [...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='Native plan');"), 'native pages view lists the agent-authored page')
+    page_id = next(page['id'] for page in workspace['pages'] if page['title'] == 'Native plan')
+    browser.call('POST', '/url', {'url':second.origin+'/#mastermind/pages/'+page_id})
+    wait_for(lambda: browser.script('return document.querySelector(".canvas-page-select")?.value;') == page_id, 'native pages view selects the agent-authored page')
     sandbox = wait_for(lambda: browser.script('const frame=document.querySelector("iframe");return frame && {sandbox:frame.getAttribute("sandbox"),srcdoc:frame.getAttribute("srcdoc")};'), 'native HTML canvas loads')
     require(sandbox and sandbox['sandbox'] == '' and 'Native canvas proof' in sandbox['srcdoc'], 'HTML canvas is missing or unsandboxed')
     for theme in ('dark', 'light'):
@@ -806,7 +821,7 @@ def check_local_mastermind(browser, second, state, artifacts):
         finally:
             browser.call('POST', '/frame', {'id':None})
     browser.screenshot(artifacts / 'native-mastermind-pages.png')
-    check_canvas_layout(browser, second, workspace['pages'][0]['id'], artifacts)
+    check_canvas_layout(browser, second, page_id, artifacts)
     browser.select_mastermind_view('Tasks')
     wait_for(lambda: browser.script('return document.querySelector(\'article[aria-label="Verify native terminal"] select\')?.value==="done";'), 'native tasks view shows the agent-authored completed task')
     require(browser.script('return !document.querySelector(".terminal-shell,.canvas-document iframe");'), 'Tasks view unexpectedly retained another workspace view')
@@ -865,7 +880,9 @@ def check_terminal_panes(browser, second, original, artifacts):
         wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane .xterm").length;') == 1, 'original pane restored')
         for index, record in enumerate(added, 2):
             browser.click_css(pane(original) + ' [aria-label="Add terminal pane"]')
-            browser.click_css(f'[aria-label="{record["title"]} on This computer"]')
+            choice = f'[aria-label="{record["title"]} on This computer"]'
+            wait_for(lambda selector=choice: browser.script('return !!document.querySelector(arguments[0]);', selector), 'created session appears in the native picker after fleet refresh')
+            browser.click_css(choice)
             wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane .xterm").length;') == index, 'next real PTY pane attached')
         browser.script('window.relayNativePaneNodes=[...document.querySelectorAll(".terminal-pane .xterm")];')
         for index, record in enumerate(records, 1):
@@ -917,6 +934,17 @@ def check_terminal_panes(browser, second, original, artifacts):
         require(browser.script('return window.relayNativePaneNodes.slice(0,3).every(node=>node.isConnected);'), 'Closing one pane remounted another')
         (artifacts / 'native-four-panes.json').write_text(json.dumps({'geometry': sizes, 'scrollbarDidNotClaim': True, 'zoomKeptFourMounted': True, 'closedPaneKeptAllSessions': True}, indent=2) + '\n')
         print('PASS: four real native PTY panes isolate input, fit geometry, scroll without claiming, preserve mounts on zoom and keep sessions on view close', flush=True)
+        saved_groups = wait_for(lambda: (lambda record: record if any(len(group['panes']) == 3 for group in record['groups']) else None)(browser.terminal_groups()), 'native group persisted all three remaining viewers')
+        group = next(group for group in saved_groups['groups'] if len(group['panes']) == 3)
+        require(all(any(pane_ref['session'] == item['id'] and pane_ref['createdAt'] == item['createdAt'] for pane_ref in group['panes']) for item in records[:3]), 'Saved group lost exact session identities')
+        browser.call('POST', '/url', {'url': second.origin + '/#host/local/session/' + original})
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane").length;') == 1, 'single terminal navigation preserves saved group independently')
+        require(browser.terminal_groups() == saved_groups, 'Single view overwrote the saved split')
+        browser.click_css('[data-terminal-group="'+group['id']+'"] .terminal-group-open')
+        wait_for(lambda: browser.script('return document.querySelectorAll(".terminal-pane").length;') == 3, 'saved native split restores all viewers')
+        print('PASS: native group IPC stores exact sessions and restores a split after standalone navigation', flush=True)
+        return saved_groups
+
     finally:
         for record in added:
             with contextlib.suppress(Exception):
@@ -1078,7 +1106,7 @@ def run(args):
                 browser.screenshot(artifacts / "native-reopened.png")
                 print("PASS: native close/reopen preserves controller, runtime, terminal and input", flush=True)
                 check_local_mastermind(browser, second, state, artifacts)
-                check_terminal_panes(browser, second, session, artifacts)
+                saved_groups = check_terminal_panes(browser, second, session, artifacts)
                 # The pane test changes the canonical grid and writes newer
                 # output. Verify earlier output in history, then use the latest
                 # visible marker for the subsequent snapshot-replay assertion.
@@ -1101,6 +1129,8 @@ def run(args):
                 wait_for(browser.sidebar_collapsed, 'native sidebar preference survives controller port change')
                 require(browser.script("return localStorage.getItem('relay.attention-collapsed.v1');") is None, "New-origin preference was restored from browser storage instead of the native file")
                 require(browser.appearance() == {'preference': 'light', 'resolved': 'light'}, "Appearance changed during controller restart")
+                require(browser.terminal_groups() == saved_groups, 'Saved native groups changed across app/controller restart and port change')
+                print('PASS: saved terminal groups survive native close/reopen and a new controller origin', flush=True)
                 browser.screenshot(artifacts / 'native-attention-new-origin.png')
                 browser.call('POST', '/url', {'url': second.origin + '/#host/local/session/' + session})
                 wait_for(lambda: browser.terminal_contains('RELAY_PANE_1_OWNED'), 'same terminal restores its latest screen after controller origin change')

@@ -56,6 +56,9 @@ func (s *Server) initializeMastermindProject() error {
 	return nil
 }
 func (s *Server) mastermindState() MastermindState {
+	if state, hosted := s.hostedMastermindState(); hosted {
+		return state
+	}
 	return s.withMastermindLocal(s.mastermind.current().MastermindState)
 }
 func (s *Server) withMastermindLocal(state MastermindState) MastermindState {

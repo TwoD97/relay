@@ -113,6 +113,16 @@ pub fn page_loaded(view: &Webview, url: &Url) {
     }
 }
 
+// Immutable process-role metadata. A detached viewer cannot become the primary
+// request consumer by changing its hash; no additional IPC permission is granted.
+pub fn primary_window_initialization(detached: bool) -> &'static str {
+    if detached {
+        "if(window===window.top)Object.defineProperty(window,'__RELAY_PRIMARY_WINDOW__',{value:false,writable:false,configurable:false});"
+    } else {
+        "if(window===window.top)Object.defineProperty(window,'__RELAY_PRIMARY_WINDOW__',{value:true,writable:false,configurable:false});"
+    }
+}
+
 #[tauri::command]
 pub async fn open_session_window(
     webview: Webview,
@@ -164,6 +174,16 @@ pub async fn open_session_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primary_role_is_immutable_and_detached_cannot_consume_requests() {
+        assert!(primary_window_initialization(false).contains("value:true"));
+        assert!(primary_window_initialization(true).contains("value:false"));
+        for detached in [false, true] {
+            assert!(primary_window_initialization(detached).contains("window===window.top"));
+            assert!(primary_window_initialization(detached)
+                .contains("writable:false,configurable:false"));
+        }
+    }
     #[test]
     fn terminal_arguments_accept_only_literal_identities() {
         let id = "0123456789abcdef0123456789abcdef";

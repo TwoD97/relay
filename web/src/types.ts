@@ -69,6 +69,7 @@ export interface Session {
 }
 
 export interface Harness {
+  conversationResume?: boolean;
   id: HarnessId;
   name: string;
   installed: boolean;
@@ -100,6 +101,7 @@ export interface MastermindConfig {
   cwd: string;
 }
 export interface MastermindState {
+  controllerHostId?: string;
   revision: number;
   enabled: boolean;
   config?: MastermindConfig;
@@ -124,7 +126,7 @@ export interface MastermindTask {
   pageId?: string;
   updatedAt: string;
 }
-export interface MastermindPageInfo { id: string; title: string; updatedAt: string }
+export interface MastermindPageInfo { id: string; title: string; updatedAt: string; template?: "status-v1" }
 export interface MastermindPage extends MastermindPageInfo { html: string; revision: number }
 export interface MastermindWorkspaceState {
   revision: number;
@@ -207,7 +209,7 @@ export interface FleetState {
 
 export type MastermindSection = "overview" | "pages" | "tasks" | "terminal";
 export type TerminalPaneRef = { host: string; session: string; createdAt?: string };
-export type Selection = { host: string; session?: string; view?: never; expanded?: boolean; page?: never; section?: never; panes?: TerminalPaneRef[] }
-  | { view: "activity"; host?: never; session?: never; expanded?: never; page?: never; section?: never; panes?: never }
-  | { view: "mastermind"; host?: never; session?: never; expanded?: boolean; page?: string; section?: MastermindSection; panes?: never }
+export type Selection = { host: string; session?: string; view?: never; expanded?: boolean; page?: never; section?: never; panes?: TerminalPaneRef[]; groupId?: string }
+  | { view: "activity" | "skills"; host?: never; session?: never; expanded?: never; page?: never; section?: never; panes?: never; groupId?: never }
+  | { view: "mastermind"; host?: never; session?: never; expanded?: boolean; page?: string; section?: MastermindSection; panes?: never; groupId?: never }
   | null;

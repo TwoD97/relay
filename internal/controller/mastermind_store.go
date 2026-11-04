@@ -44,17 +44,18 @@ type MastermindSession struct {
 }
 
 type MastermindState struct {
-	Local     *MastermindLocal   `json:"local,omitempty"`
-	Revision  uint64             `json:"revision"`
-	Enabled   bool               `json:"enabled"`
-	Config    *MastermindConfig  `json:"config,omitempty"`
-	Status    string             `json:"status"`
-	Execution string             `json:"execution,omitempty"`
-	Blocker   string             `json:"blocker,omitempty"`
-	Stage     string             `json:"stage"`
-	Error     string             `json:"error,omitempty"`
-	Session   *MastermindSession `json:"session,omitempty"`
-	UpdatedAt time.Time          `json:"updatedAt"`
+	ControllerHostID string             `json:"controllerHostId,omitempty"`
+	Local            *MastermindLocal   `json:"local,omitempty"`
+	Revision         uint64             `json:"revision"`
+	Enabled          bool               `json:"enabled"`
+	Config           *MastermindConfig  `json:"config,omitempty"`
+	Status           string             `json:"status"`
+	Execution        string             `json:"execution,omitempty"`
+	Blocker          string             `json:"blocker,omitempty"`
+	Stage            string             `json:"stage"`
+	Error            string             `json:"error,omitempty"`
+	Session          *MastermindSession `json:"session,omitempty"`
+	UpdatedAt        time.Time          `json:"updatedAt"`
 }
 
 type MastermindLocal struct {

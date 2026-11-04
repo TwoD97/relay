@@ -31,10 +31,15 @@ test("a canvas expands to the full window on its own page route and restores wit
   const fixture = await canvasFixture(page);
   const iframe = page.locator('iframe[title="Responsive report canvas"]');
   await expect(page.locator(".mastermind")).toHaveCount(0);
-  const originalHeight = (await iframe.boundingBox())!.height;
+  await expect(page.locator(".topbar")).toBeHidden();
+  await expect(page.locator(".workspace-heading, .workspace-page-navigation")).toHaveCount(0);
+  await expect(page.getByLabel("Canvas page", { exact: true })).toHaveValue(pageId);
+  expect((await page.getByRole("toolbar", { name: "Page controls" }).boundingBox())!.height).toBeLessThanOrEqual(48);
+  expect((await iframe.boundingBox())!.height).toBeGreaterThan(page.viewportSize()!.height - 64);
   const original = await iframe.elementHandle();
   for (const theme of ["Light", "Dark"]) {
-    await page.getByLabel("Appearance", { exact: true }).selectOption(theme.toLowerCase());
+    await page.evaluate((theme) => { localStorage.setItem("relay.appearance.v1", theme.toLowerCase()); window.dispatchEvent(new StorageEvent("storage", { key: "relay.appearance.v1", newValue: theme.toLowerCase(), storageArea: localStorage })); }, theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme.toLowerCase());
     await page.getByRole("button", { name: "Expand page to full window", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${pageId}/window$`));
     await expect(page.getByRole("navigation", { name: "Mastermind views", exact: true })).toBeHidden();
@@ -42,27 +47,23 @@ test("a canvas expands to the full window on its own page route and restores wit
     await expect(page.locator(".workspace-heading")).toBeHidden();
     await expect(iframe).toHaveAttribute("sandbox", "");
     await expectExpandedFrame(page);
-    expect((await iframe.boundingBox())!.height).toBeGreaterThan(originalHeight + 100);
+
     await expect(page.locator(".xterm")).toHaveCount(0);
     if (testInfo.project.name === "desktop") await page.screenshot({ path: testInfo.outputPath(`canvas-expanded-${theme.toLowerCase()}.png`), animations: "disabled" });
     await page.getByRole("button", { name: "Restore page layout", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`#mastermind/pages/${pageId}$`));
-    await expect(page.getByRole("tab", { name: "Responsive report", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("navigation", { name: "Mastermind views", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Canvas page", { exact: true })).toHaveValue(pageId);
+    await expect(page.getByRole("button", { name: "Back to Mastermind overview", exact: true })).toBeVisible();
     expect(await original!.evaluate((element) => element.isConnected && element === document.querySelector("iframe"))).toBe(true);
   }
   expect(fixture.attachments).toEqual([]);
   expect(fixture.mutations).toEqual([]);
 });
 
-test("Fit page width changes only the preview's outer wrapper and keeps authored HTML and sandbox intact", async ({ page }) => {
+test("pages always fit only the preview outer wrapper and keep authored HTML and sandbox intact", async ({ page }) => {
   const fixture = await canvasFixture(page);
   const frame = page.frameLocator('iframe[title="Responsive report canvas"]');
-  const fit = page.getByRole("button", { name: "Fit page width", exact: true });
-  await expect(fit).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator("main.report")).toHaveCSS("width", "200px");
-  await fit.click();
-  await expect(fit).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Fit page width", exact: true })).toHaveCount(0);
   await expect.poll(() => frame.locator("main.report").evaluate((main) => {
     const width = main.getBoundingClientRect().width;
     return width > 220 && Math.abs(width - document.body.getBoundingClientRect().width) < 2;
@@ -82,9 +83,6 @@ test("Fit page width changes only the preview's outer wrapper and keeps authored
   await page.getByRole("button", { name: "Edit HTML", exact: true }).click();
   await expect(page.getByRole("dialog").getByLabel("Page HTML", { exact: true })).toHaveValue(authored);
   await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
-  await fit.click();
-  await expect(fit).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator("main.report")).toHaveCSS("width", "200px");
   expect(fixture.pages[0].html).toBe(authored);
   expect(fixture.mutations).toEqual([]);
   expect(fixture.attachments).toEqual([]);
@@ -97,7 +95,7 @@ test("expanded canvas deep links survive reload and browser history without sele
   await expect(page.frameLocator('iframe[title="Responsive report canvas"]').getByRole("heading", { name: "Canvas width proof", exact: true })).toBeVisible();
   await expectExpandedFrame(page);
   await page.getByRole("button", { name: "Restore page layout", exact: true }).click();
-  await page.getByRole("tab", { name: "Another report", exact: true }).click();
+  await page.getByLabel("Canvas page", { exact: true }).selectOption(secondId);
   await expect(page.frameLocator('iframe[title="Another report canvas"]').getByRole("heading", { name: "Different page", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page.frameLocator('iframe[title="Responsive report canvas"]').getByRole("heading", { name: "Canvas width proof", exact: true })).toBeVisible();
@@ -107,4 +105,30 @@ test("expanded canvas deep links survive reload and browser history without sele
   await expect(page.locator(".xterm")).toHaveCount(0);
   expect(fixture.attachments).toEqual([]);
   expect(fixture.mutations).toEqual([]);
+});
+
+
+test("compact page selection keeps live status explicit and editing it requires a deliberate save", async ({ page }) => {
+  const fixture = await canvasFixture(page);
+  fixture.pages[0].template = "status-v1";
+  fixture.workspace.pages[0].template = "status-v1";
+  fixture.workspace.pages[0].updatedAt = "2026-11-04T08:00:00Z";
+  await page.getByRole("button", { name: "Refresh Mastermind workspace" }).click();
+  await expect(page.getByRole("option", { name: "Responsive report · Live status", exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "Edit HTML", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit canvas page" });
+  await expect(editor).toContainText("Saving HTML turns it into a regular page");
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(fixture.mutations).toEqual([]);
+  await page.getByRole("button", { name: "Edit HTML", exact: true }).click();
+  await editor.getByLabel("Page HTML", { exact: true }).fill("<h1>My static report</h1>");
+  await editor.getByRole("button", { name: "Save page", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("option", { name: "Responsive report", exact: true })).toHaveCount(1);
+  expect(fixture.mutations).toHaveLength(1);
+  expect(fixture.mutations[0].body).not.toHaveProperty("template");
+  await page.getByRole("button", { name: "Expand page to full window", exact: true }).click();
+  await page.getByRole("button", { name: "Back to Mastermind overview", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Mastermind views", exact: true }).getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
+  expect(fixture.attachments).toEqual([]);
 });

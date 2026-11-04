@@ -1,8 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { ArrowUpRight, Bell, BrainCircuit, ChevronDown, ChevronRight, Folder, Layers3, PanelsTopLeft, Plus, Search, Server, Terminal, X } from "lucide-react";
+import { ArrowUpRight, Bell, BrainCircuit, ChevronDown, ChevronRight, Folder, Layers3, BookOpen, PanelsTopLeft, Plus, Search, Server, Terminal, X } from "lucide-react";
 import type { FleetState, Host, Selection, Session } from "./types";
 import { approvalActionable, pendingApprovals } from "./Approvals";
 import { maintenanceNeedsAttention } from "./MaintenanceJobs";
+import { groupTitle, matchingGroupSession, type TerminalGroup } from "./terminalGroups";
+import { paneSelection } from "./terminalLayout";
 import { useSidebarAttention } from "./sidebarAttention";
 import "./SidebarCompact.css";
 
@@ -22,7 +24,7 @@ function readCollapsed(): Record<string, boolean> {
   try { const value: unknown = JSON.parse(localStorage.getItem("relay-collapsed") ?? "{}"); return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, boolean> : {}; } catch { return {}; }
 }
 
-export function Sidebar({ state, selected, terminalWorkspace, mobileOpen, onClose, onSelect, onAdd }: { state: FleetState; selected: Selection; terminalWorkspace?: Selection; mobileOpen: boolean; onClose: () => void; onSelect: (selection: Selection) => void; onAdd: () => void }) {
+export function Sidebar({ state, selected, terminalGroups, onGroupChange, onGroupRemove, mobileOpen, onClose, onSelect, onAdd }: { state: FleetState; selected: Selection; terminalGroups: TerminalGroup[]; onGroupChange: (group: TerminalGroup) => void; onGroupRemove: (id: string) => void; mobileOpen: boolean; onClose: () => void; onSelect: (selection: Selection) => void; onAdd: () => void }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const attentionPreference = useSidebarAttention();
@@ -30,18 +32,45 @@ export function Sidebar({ state, selected, terminalWorkspace, mobileOpen, onClos
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 800px)").matches);
   useEffect(() => { const query = window.matchMedia("(max-width: 800px)"); const update = () => setMobile(query.matches); query.addEventListener("change", update); return () => query.removeEventListener("change", update); }, []);
   const toggle = (key: string) => setCollapsed((old) => { const next = { ...old, [key]: !old[key] }; try { localStorage.setItem("relay-collapsed", JSON.stringify(next)); } catch { /* The tree remains usable without storage. */ } return next; });
+  const select = (value: Selection) => { onSelect(value); onClose(); };
+  const groupMatches = (group: TerminalGroup) => {
+    const text = [groupTitle(group, state), group.hostName, group.workspace, ...group.panes.flatMap((p) => {
+      const session = matchingGroupSession(state, p), host = state.hosts.find((h) => h.id === p.host);
+      return [host?.name, host?.target, session?.title, session?.cwd, session?.workspace, session?.harness];
+    })].join(" ").toLowerCase();
+    return text.includes(query.trim().toLowerCase());
+  };
   const entries = useMemo(() => {
     const match = query.trim().toLowerCase();
     return state.hosts.map((host) => {
       const all = state.runtimes[host.id]?.sessions ?? [];
       const hostMatch = `${host.name} ${host.target}`.toLowerCase().includes(match);
-      const sessions = all.filter((session) => !match || hostMatch || `${session.title} ${session.cwd} ${session.workspace} ${session.harness}`.toLowerCase().includes(match));
-      const groups = new Map<string, Session[]>();
-      for (const session of sessions) { const group = session.workspace || "Workspace"; groups.set(group, [...(groups.get(group) ?? []), session]); }
-      return { host, groups: [...groups].sort(([a], [b]) => a.localeCompare(b)), visible: !match || hostMatch || sessions.length > 0 };
+      const sessions = all.filter((session) => !terminalGroups.some((g) => g.panes.some((p) => p.host === host.id && p.session === session.id && p.createdAt === session.createdAt)))
+        .filter((session) => !match || hostMatch || `${session.title} ${session.cwd} ${session.workspace} ${session.harness}`.toLowerCase().includes(match));
+      const groups = new Map<string, { sessions: Session[]; splits: TerminalGroup[] }>();
+      for (const session of sessions) { const key = session.workspace || "Workspace"; const value = groups.get(key) ?? { sessions: [], splits: [] }; value.sessions.push(session); groups.set(key, value); }
+      for (const split of terminalGroups.filter((g) => g.panes[0].host === host.id && groupMatches(g))) {
+        const key = matchingGroupSession(state, split.panes[0])?.workspace || split.workspace;
+        const value = groups.get(key) ?? { sessions: [], splits: [] }; value.splits.push(split); groups.set(key, value);
+      }
+      return { host, groups: [...groups].sort(([a], [b]) => a.localeCompare(b)), grouped: all.length > 0, visible: !match || hostMatch || groups.size > 0 };
     }).filter((entry) => entry.visible);
-  }, [query, state.hosts, state.runtimes]);
-  const select = (value: Selection) => { onSelect(value); onClose(); };
+  }, [query, state.hosts, state.runtimes, terminalGroups]);
+  const renderGroup = (group: TerminalGroup) => {
+    const title = groupTitle(group, state), expanded = !group.collapsed || Boolean(query.trim());
+    const id = `terminal-group-${group.id}`;
+    return <div className="terminal-tree-group" key={group.id} data-terminal-group={group.id}>
+      <div className={`terminal-group-row ${selected?.groupId === group.id ? "selected" : ""}`}>
+        <button className="tree-chevron" aria-label={`${expanded ? "Collapse" : "Expand"} terminal group ${title}`} aria-expanded={expanded} aria-controls={id} onClick={() => onGroupChange({ ...group, collapsed: expanded })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>
+        <button className="terminal-group-open" aria-label={`Open terminal group ${title}`} title={`Open ${group.panes.length} saved panes`} onClick={() => select(paneSelection(group.panes, 0, false, group.id))}><PanelsTopLeft size={13} /><span>{title}</span><small>{group.panes.length}</small></button>
+        <button className="terminal-group-remove" aria-label={`Forget terminal group ${title}`} title="Forget this group; sessions keep running" onClick={() => onGroupRemove(group.id)}><X size={12} /></button>
+      </div>
+      <div className="terminal-group-members" id={id} hidden={!expanded}>{group.panes.map((pane, index) => {
+        const session = matchingGroupSession(state, pane), host = state.hosts.find((h) => h.id === pane.host);
+        return <button key={JSON.stringify([pane.host, pane.session, pane.createdAt])} className={`session-row ${!selected?.groupId && selected?.host === pane.host && selected.session === pane.session ? "selected" : ""}`} title={session?.cwd ?? "Saved session identity is unavailable"} onClick={() => select(paneSelection([pane], 0))}><Terminal size={12} /><span>{session?.title ?? (index === 0 ? `${group.title} · unavailable` : "Unavailable session")}<small>{host?.name ?? "Unavailable machine"}</small></span><span className={`session-tree-dot session-${session?.status ?? "interrupted"}`} aria-label={session?.status ?? "unavailable"} /></button>;
+      })}</div>
+    </div>;
+  };
   const attention = state.hosts.flatMap((host) => (state.runtimes[host.id]?.sessions ?? []).filter((session) => session.attention && session.attention.kind !== "completed" && !(!state.error && (state.runtimes[host.id]?.approvals ?? []).some((request) => request.sessionId === session.id && request.sessionCreatedAt === session.createdAt && approvalActionable(host, state.runtimes[host.id], request)))).map((session) => ({ host, session })));
   const maintenanceAttention = new Set((state.maintenanceJobs ?? []).filter(maintenanceNeedsAttention).map((job) => job.hostId));
   const hostAttention = state.hosts.filter((host) => host.status === "error" || host.runtimeOperation?.status === "error" || host.setupWarning || maintenanceAttention.has(host.id));
@@ -53,7 +82,7 @@ export function Sidebar({ state, selected, terminalWorkspace, mobileOpen, onClos
       <div className="sidebar-mobile-header"><span>Navigation</span><button className="icon-button mobile-close" aria-label="Close navigation" onClick={onClose}><X size={18} /></button></div>
       <div className="sidebar-main"><button className={`fleet-nav ${!selected ? "active" : ""}`} onClick={() => select(null)}><Layers3 size={17} /><span>Fleet overview</span><span className="nav-count">{state.hosts.length}</span></button>
         <button className={`fleet-nav ${selected?.view === "mastermind" ? "active" : ""}`} onClick={() => select({ view: "mastermind" })}><BrainCircuit size={17} /><span>Mastermind</span></button>
-        {terminalWorkspace && <button className={`fleet-nav ${(selected?.panes?.length ?? 0) > 1 ? "active" : ""}`} onClick={() => select(terminalWorkspace)}><PanelsTopLeft size={17} /><span>Terminals</span><span className="nav-count">{terminalWorkspace.panes?.length ?? 1}</span></button>}
+        <button className={`fleet-nav ${selected?.view === "skills" ? "active" : ""}`} onClick={() => select({ view: "skills" })}><BookOpen size={17} /><span>Skills</span></button>
         <button className={`fleet-nav ${selected?.view === "activity" ? "active" : ""}`} onClick={() => select({ view: "activity" })}><Bell size={17} /><span>Activity</span>{approvals > 0 && <span className="nav-count" aria-label={`${approvals} pending approvals`}>{approvals}</span>}</button>
         <label className="sidebar-search"><Search size={15} /><input aria-label="Filter machines and sessions" placeholder="Find a machine or session…" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button aria-label="Clear filter" onClick={() => setQuery("")}><X size={13} /></button>}</label>
         <section className={`attention-pins ${attentionCount + approvals ? "" : "attention-quiet"} ${attentionPreference.collapsed ? "attention-collapsed" : ""}`} aria-label="Needs attention"><button type="button" className="attention-label" aria-label={`${attentionPreference.collapsed ? "Expand" : "Collapse"} needs attention`} aria-expanded={!attentionPreference.collapsed} aria-controls={attentionListId} aria-describedby={`${attentionListId}-count`} onClick={attentionPreference.toggle}><Bell size={12} /><span>NEEDS ATTENTION</span><b id={`${attentionListId}-count`} aria-label={`${attentionCount + approvals} items need attention`}>{attentionCount + approvals}</b>{attentionPreference.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button><div className="attention-list" id={attentionListId} hidden={attentionPreference.collapsed} tabIndex={0} aria-label="Attention items">
@@ -62,19 +91,20 @@ export function Sidebar({ state, selected, terminalWorkspace, mobileOpen, onClos
           {attentionCount + approvals === 0 && <p className="attention-empty">No reported requests or notifications.</p>}
         </div>{attentionPreference.error && <p className="attention-save-error" role="status">{attentionPreference.error}</p>}</section>
         <div className="sidebar-section-label"><span>MACHINES</span><button aria-label="Add machine" title="Add machine" onClick={onAdd}><Plus size={15} /></button></div>
-        <nav className="host-tree" aria-label="Machines and workspaces">{entries.map(({ host, groups }) => <div className="tree-host" key={host.id}>
+        <nav className="host-tree" aria-label="Machines and workspaces">{entries.map(({ host, groups, grouped }) => <div className="tree-host" key={host.id}>
           <div className={`tree-host-row ${selected?.host === host.id && !selected.session ? "selected" : ""}`}>
             <button className="tree-chevron" aria-label={`${collapsed[host.id] ? "Expand" : "Collapse"} ${host.name}`} aria-expanded={!collapsed[host.id]} onClick={() => toggle(host.id)}>{collapsed[host.id] && !query ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button>
             <button className="host-select" onClick={() => select({ host: host.id })}><Server size={16} /><span>{host.name}</span><span className={`host-dot status-${host.status}`} title={host.status} aria-label={host.status} /></button>
           </div>
           {(!collapsed[host.id] || query) && <div className={`tree-workspaces ${host.status !== "online" ? "tree-stale" : ""}`}>
-            {groups.map(([workspace, sessions]) => {
+            {groups.map(([workspace, { sessions, splits }]) => {
               const key = JSON.stringify([host.id, workspace]);
-              return <div className="tree-workspace" key={key}><button className="workspace-row" onClick={() => toggle(key)} aria-expanded={!collapsed[key]}>{collapsed[key] && !query ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={13} /><span>{workspace}</span><small>{sessions.length}</small></button>{(!collapsed[key] || query) && <div className="tree-sessions">{sessions.map((session) => <button key={session.id} className={`session-row ${selected?.host === host.id && selected.session === session.id ? "selected" : ""}`} onClick={() => select({ host: host.id, session: session.id })} title={session.cwd}><Terminal size={13} /><span>{session.title}</span><span className={`session-tree-dot session-${session.status}`} aria-label={session.status} /></button>)}</div>}</div>;
+              return <div className="tree-workspace" key={key}><button className="workspace-row" onClick={() => toggle(key)} aria-expanded={!collapsed[key]}>{collapsed[key] && !query ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={13} /><span>{workspace}</span><small>{sessions.length + splits.reduce((sum, g) => sum + g.panes.length, 0)}</small></button>{(!collapsed[key] || query) && <div className="tree-sessions">{splits.map(renderGroup)}{sessions.map((session) => <button key={session.id} className={`session-row ${selected?.host === host.id && selected.session === session.id ? "selected" : ""}`} onClick={() => select({ host: host.id, session: session.id })} title={session.cwd}><Terminal size={13} /><span>{session.title}</span><span className={`session-tree-dot session-${session.status}`} aria-label={session.status} /></button>)}</div>}</div>;
             })}
-            {groups.length === 0 && <button className="tree-empty" onClick={() => select({ host: host.id })}>{host.status === "online" ? "No sessions yet" : host.status === "disconnected" ? "Disconnected" : host.status === "error" ? "Connection needs attention" : "Setting up…"}<ArrowUpRight size={12} /></button>}
+            {groups.length === 0 && <button className="tree-empty" onClick={() => select({ host: host.id })}>{host.status === "online" ? grouped ? "Sessions in saved groups" : "No sessions yet" : host.status === "disconnected" ? "Disconnected" : host.status === "error" ? "Connection needs attention" : "Setting up…"}<ArrowUpRight size={12} /></button>}
           </div>}
         </div>)}</nav>
+        {terminalGroups.some((g) => !state.hosts.some((h) => h.id === g.panes[0].host) && groupMatches(g)) && <section className="orphan-terminal-groups" aria-label="Saved terminal groups"><span className="sidebar-section-label">SAVED TERMINAL GROUPS</span>{terminalGroups.filter((g) => !state.hosts.some((h) => h.id === g.panes[0].host) && groupMatches(g)).map(renderGroup)}</section>}
         {!state.loading && entries.length === 0 && <p className="sidebar-empty">{query ? "No matching machines or sessions." : "Your machines will appear here. Connect one to get started."}</p>}
       </div>
       <footer className="sidebar-footer"><button className="button add-machine" onClick={onAdd}><Plus size={17} /> Connect a machine</button><div className="sidebar-meta"><span className={`controller-light ${state.error ? "offline" : ""}`} /><span>{state.error ? "Controller unavailable" : "Personal control plane"}</span><span className="sidebar-version">{state.version || "relay"}</span></div></footer>
